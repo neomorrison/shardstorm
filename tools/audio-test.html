@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Shardstorm audio test</title>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+  :root { color-scheme: dark; }
+  body { margin: 0; padding: 16px; background: #10131c; color: #e8ecf6; font: 14px/1.4 system-ui, sans-serif; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 14px; margin: 18px 0 6px; color: #9fb3d9; text-transform: uppercase; letter-spacing: 0.04em; }
+  p.note { color: #8892ab; margin: 0 0 12px; }
+  .row { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 8px; align-items: center; }
+  button { background: #232a3d; color: #e8ecf6; border: 1px solid #3a4463; border-radius: 6px; padding: 6px 10px; font-size: 13px; cursor: pointer; }
+  button:hover { background: #2d3550; }
+  button.primary { background: #3d63d8; border-color: #4d73e8; }
+  button.primary:hover { background: #4a70e8; }
+  button.danger { background: #5a2a2a; border-color: #7a3a3a; }
+  label.slider { display: flex; align-items: center; gap: 6px; }
+  input[type=range] { width: 140px; }
+  #log { background: #0a0c12; border: 1px solid #232a3d; border-radius: 6px; padding: 10px; white-space: pre-wrap; font: 12px/1.5 ui-monospace, monospace; max-height: 300px; overflow: auto; }
+  #status { font-weight: 600; }
+  .ok { color: #5fdc8f; }
+  .bad { color: #ff6b6b; }
+</style>
+</head>
+<body>
+<h1>Shardstorm audio test</h1>
+<p class="note">Owned by src/audio/audio.js. Every button drives Audio only through its public API (onEvents, click, hover, startMusic, stopMusic, setIntensity), matching the sim event shapes in docs/ARCHITECTURE.md section 4.</p>
+
+<h2>Setup</h2>
+<div class="row">
+  <button class="primary" id="unlock">Unlock audio</button>
+  <span id="status">not unlocked</span>
+</div>
+<div class="row">
+  <label class="slider">SFX volume <input type="range" id="sfxVol" min="0" max="1" step="0.01" value="0.8"></label>
+  <label class="slider">Music volume <input type="range" id="musicVol" min="0" max="1" step="0.01" value="0.5"></label>
+</div>
+<div class="row">
+  <button id="startMusic">Start music</button>
+  <button id="stopMusic">Stop music</button>
+  <label class="slider">Intensity <input type="range" id="intensity" min="0" max="1" step="0.01" value="0"></label>
+</div>
+
+<h2>UI sounds</h2>
+<div class="row" id="uiButtons"></div>
+
+<h2>Shots (by visual)</h2>
+<div class="row" id="shotButtons"></div>
+
+<h2>Pops and combat</h2>
+<div class="row" id="popButtons"></div>
+
+<h2>Waves, titans, economy</h2>
+<div class="row" id="eventButtons"></div>
+
+<h2>Stress test</h2>
+<p class="note">Feeds synthetic events at a target rate for a few seconds and reports whether the voice budget stayed bounded and no exception was thrown.</p>
+<div class="row">
+  <button class="primary" id="stress1">Run stress test (5000 events/sec, 5s)</button>
+  <button id="stress2">Run stress test (1000 events/sec, 3s)</button>
+  <button class="danger" id="clearLog">Clear log</button>
+</div>
+<div id="log">(no runs yet)</div>
+
+<script type="module">
+import { Audio } from '../src/audio/audio.js';
+
+const audio = new Audio();
+window.__audioTest = { audio };
+
+const log = document.getElementById('log');
+function print(line) {
+  log.textContent = (log.textContent === '(no runs yet)' ? '' : log.textContent + '\n') + line;
+  log.scrollTop = log.scrollHeight;
+}
+window.__audioTest.print = print;
+
+const statusEl = document.getElementById('status');
+function refreshStatus() {
+  const ready = audio.ready;
+  statusEl.textContent = ready ? `running (ctx state: ${audio.ctx.state})` : `not ready (available=${audio.available}, unlocked=${audio.unlocked}, state=${audio.ctx ? audio.ctx.state : 'no ctx'})`;
+  statusEl.className = ready ? 'ok' : 'bad';
+}
+setInterval(refreshStatus, 300);
+refreshStatus();
+
+document.getElementById('unlock').addEventListener('click', () => { audio.unlock(); refreshStatus(); print('unlock() called'); });
+document.getElementById('sfxVol').addEventListener('input', (e) => audio.setVolumes({ sfx: Number(e.target.value) }));
+document.getElementById('musicVol').addEventListener('input', (e) => audio.setVolumes({ music: Number(e.target.value) }));
+document.getElementById('startMusic').addEventListener('click', () => { audio.startMusic(); print('startMusic() called'); });
+document.getElementById('stopMusic').addEventListener('click', () => { audio.stopMusic(); print('stopMusic() called'); });
+document.getElementById('intensity').addEventListener('input', (e) => audio.setIntensity(Number(e.target.value)));
+
+function addButton(container, label, fn) {
+  const b = document.createElement('button');
+  b.textContent = label;
+  b.addEventListener('click', () => { try { fn(); } catch (err) { print('ERROR on "' + label + '": ' + err.message); } });
+  container.appendChild(b);
+  return b;
+}
+
+// UI sounds
+const uiEl = document.getElementById('uiButtons');
+addButton(uiEl, 'click()', () => audio.click());
+addButton(uiEl, 'hover()', () => audio.hover());
+
+// Shot visuals (docs list: bolt, shard, slug/rail crack, missile, mortar, tesla, cryo, flame, orb)
+const shotEl = document.getElementById('shotButtons');
+const SHOT_VISUALS = ['bolt', 'shard', 'slug', 'missile', 'mortar', 'tesla', 'cryo', 'flame', 'orb'];
+for (const visual of SHOT_VISUALS) {
+  addButton(shotEl, 'shot: ' + visual, () => audio.onEvents([{ t: 'shot', tower: 't1', x: 0, y: 0, angle: 0, visual, dtype: 'KINETIC' }]));
+}
+addButton(shotEl, 'shot: unknown visual (fallback)', () => audio.onEvents([{ t: 'shot', tower: 't1', x: 0, y: 0, angle: 0, visual: 'made_up_visual_123', dtype: 'VOID' }]));
+
+// Pops and combat
+const popEl = document.getElementById('popButtons');
+const METEOR_TYPES = ['rust', 'cobalt', 'jade', 'amber', 'rose', 'iron', 'magma', 'comet', 'prism', 'geode', 'aurora', 'obsidian'];
+for (const type of METEOR_TYPES) {
+  addButton(popEl, 'pop: ' + type, () => audio.onEvents([{ t: 'pop', x: 0, y: 0, type, color: '#fff', ship: false, count: 1 }]));
+}
+addButton(popEl, 'pop: ship hull crunch', () => audio.onEvents([{ t: 'pop', x: 0, y: 0, type: 'hauler', color: '#fff', ship: true, count: 1 }]));
+addButton(popEl, 'hit (spark)', () => audio.onEvents([{ t: 'hit', x: 0, y: 0, dtype: 'KINETIC' }]));
+addButton(popEl, 'blocked (clink)', () => audio.onEvents([{ t: 'blocked', x: 0, y: 0, dtype: 'KINETIC' }]));
+addButton(popEl, 'explode (small)', () => audio.onEvents([{ t: 'explode', x: 0, y: 0, r: 40, dtype: 'BLAST' }]));
+addButton(popEl, 'explode (big)', () => audio.onEvents([{ t: 'explode', x: 0, y: 0, r: 260, dtype: 'BLAST' }]));
+addButton(popEl, 'zap crackle', () => audio.onEvents([{ t: 'zap', points: [[0, 0], [10, 10], [20, 5], [30, 15]] }]));
+addButton(popEl, 'freeze shimmer', () => audio.onEvents([{ t: 'freeze', x: 0, y: 0, r: 120 }]));
+addButton(popEl, 'cash blip', () => audio.onEvents([{ t: 'cash', amount: 5, x: 0, y: 0, reason: 'pop' }]));
+
+// Waves, titans, economy
+const evEl = document.getElementById('eventButtons');
+addButton(evEl, 'leak alarm', () => audio.onEvents([{ t: 'leak', type: 'rose', mass: 5, x: 0, y: 0 }]));
+addButton(evEl, 'leak alarm (big mass)', () => audio.onEvents([{ t: 'leak', type: 'worldbreaker', mass: 50000, x: 0, y: 0 }]));
+addButton(evEl, 'wave start (rising chime)', () => audio.onEvents([{ t: 'waveStart', wave: 12 }]));
+addButton(evEl, 'wave cleared (arpeggio)', () => audio.onEvents([{ t: 'waveCleared', wave: 12, bonus: 112 }]));
+addButton(evEl, 'titan horn: maw', () => audio.onEvents([{ t: 'titan', name: 'The Maw', kind: 'maw', wave: 20 }]));
+addButton(evEl, 'titan horn: aegis', () => audio.onEvents([{ t: 'titan', name: 'Aegis Ward', kind: 'aegis', wave: 40 }]));
+addButton(evEl, 'titan horn: rift', () => audio.onEvents([{ t: 'titan', name: 'Rift Walker', kind: 'rift', wave: 60 }]));
+addButton(evEl, 'titan down (boom + shimmer)', () => audio.onEvents([{ t: 'titanDown', name: 'The Maw', x: 0, y: 0 }]));
+addButton(evEl, 'place thunk', () => audio.onEvents([{ t: 'place', tower: 't1', type: 'pulse' }]));
+addButton(evEl, 'upgrade sparkle (T1)', () => audio.onEvents([{ t: 'upgrade', tower: 't1', type: 'pulse', path: 0, tier: 1, value: 140 }]));
+addButton(evEl, 'upgrade sparkle (T5)', () => audio.onEvents([{ t: 'upgrade', tower: 't1', type: 'pulse', path: 0, tier: 5, value: 9000 }]));
+addButton(evEl, 'sell coins', () => audio.onEvents([{ t: 'sell', tower: 't1', type: 'pulse', value: 600 }]));
+addButton(evEl, 'ability whoosh', () => audio.onEvents([{ t: 'ability', id: 'overcharge', tower: 't1', x: 0, y: 0 }]));
+addButton(evEl, 'game over (descending phrase)', () => audio.onEvents([{ t: 'gameOver', wave: 87 }]));
+
+// ---- Stress test ---------------------------------------------------------
+// Synthesizes a realistic flood of high-frequency events (mostly pop/shot, some hit/blocked/
+// cash, a light sprinkling of explode/zap/freeze) at a target rate, feeding batches through
+// onEvents() at ~60Hz like the real game loop does. Verifies: no exception thrown, and the
+// active SFX voice count stays bounded (<= 24, the module's own MAX_SFX_VOICES).
+
+const DTYPES = ['KINETIC', 'BLAST', 'THERMAL', 'CRYO', 'ENERGY', 'VOID'];
+
+function randomEvent() {
+  const r = Math.random();
+  if (r < 0.45) {
+    const type = METEOR_TYPES[(Math.random() * METEOR_TYPES.length) | 0];
+    return { t: 'pop', x: Math.random() * 1500, y: Math.random() * 1000, type, color: '#fff', ship: Math.random() < 0.03, count: 1 };
+  }
+  if (r < 0.8) {
+    const visual = SHOT_VISUALS[(Math.random() * SHOT_VISUALS.length) | 0];
+    return { t: 'shot', tower: 't' + ((Math.random() * 40) | 0), x: Math.random() * 1500, y: Math.random() * 1000, angle: Math.random() * 6.28, visual, dtype: DTYPES[(Math.random() * DTYPES.length) | 0] };
+  }
+  if (r < 0.88) return { t: 'hit', x: Math.random() * 1500, y: Math.random() * 1000, dtype: DTYPES[(Math.random() * DTYPES.length) | 0] };
+  if (r < 0.94) return { t: 'blocked', x: Math.random() * 1500, y: Math.random() * 1000, dtype: DTYPES[(Math.random() * DTYPES.length) | 0] };
+  if (r < 0.98) return { t: 'cash', amount: 1 + Math.random() * 10, x: Math.random() * 1500, y: Math.random() * 1000, reason: 'pop' };
+  if (r < 0.99) return { t: 'explode', x: Math.random() * 1500, y: Math.random() * 1000, r: 30 + Math.random() * 200, dtype: 'BLAST' };
+  if (r < 0.995) return { t: 'zap', points: [[0, 0], [10, 10], [20, 20]] };
+  return { t: 'freeze', x: Math.random() * 1500, y: Math.random() * 1000, r: 80 };
+}
+
+async function runStressTest(eventsPerSec, seconds) {
+  audio.unlock();
+  await new Promise((r) => setTimeout(r, 60)); // let resume() settle
+  let sent = 0;
+  let errors = 0;
+  let maxSfxVoices = 0;
+  let maxMusicVoices = 0;
+  const perFrame = Math.max(1, Math.round(eventsPerSec / 60));
+  const start = performance.now();
+  print(`stress test starting: target ${eventsPerSec} events/sec for ${seconds}s (audio.ready=${audio.ready})`);
+  return new Promise((resolve) => {
+    function tick() {
+      const now = performance.now();
+      if (now - start >= seconds * 1000) {
+        const elapsedSec = (now - start) / 1000;
+        const result = {
+          eventsPerSec, seconds, sent, errors,
+          achievedRate: Math.round(sent / elapsedSec),
+          maxSfxVoices, maxMusicVoices,
+          maxSfxVoicesBounded: maxSfxVoices <= 24,
+          finalSfxVoices: audio.sfxVoices,
+          finalMusicVoices: audio.musicVoices,
+        };
+        window.__audioTestResult = result;
+        print('RESULT: ' + JSON.stringify(result, null, 2));
+        resolve(result);
+        return;
+      }
+      const batch = [];
+      for (let i = 0; i < perFrame; i++) batch.push(randomEvent());
+      try {
+        audio.onEvents(batch);
+        sent += batch.length;
+      } catch (err) {
+        errors++;
+        print('EXCEPTION: ' + err.message);
+      }
+      if (audio.sfxVoices > maxSfxVoices) maxSfxVoices = audio.sfxVoices;
+      if (audio.musicVoices > maxMusicVoices) maxMusicVoices = audio.musicVoices;
+      requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+  });
+}
+window.__audioTest.runStressTest = runStressTest;
+
+document.getElementById('stress1').addEventListener('click', () => runStressTest(5000, 5));
+document.getElementById('stress2').addEventListener('click', () => runStressTest(1000, 3));
+document.getElementById('clearLog').addEventListener('click', () => { log.textContent = '(no runs yet)'; });
+</script>
+</body>
+</html>

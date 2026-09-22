@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>SHARDSTORM</title>
+  <meta name="description" content="An endless tower defense. Build turrets around the gravity channel, shatter crystal meteors, and hold the Core as long as you can.">
+  <meta name="theme-color" content="#060913">
+  <meta name="color-scheme" content="dark">
+  <meta property="og:title" content="SHARDSTORM">
+  <meta property="og:description" content="An endless crystal storm tower defense. How many waves can you hold?">
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Cdefs%3E%3ClinearGradient id='g' x1='0' y1='0' x2='1' y2='1'%3E%3Cstop offset='0' stop-color='%23b8fff5'/%3E%3Cstop offset='.5' stop-color='%233ef0d8'/%3E%3Cstop offset='1' stop-color='%236d4dff'/%3E%3C/linearGradient%3E%3C/defs%3E%3Cpath d='M32 2 52 22 40 62 32 56 24 62 12 22z' fill='url(%23g)' stroke='%23060913' stroke-width='3'/%3E%3Cpath d='M32 2 40 22 32 56 24 22z' fill='%23fff' opacity='.35'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&display=swap">
+  <link rel="stylesheet" href="css/style.css">
+  <link rel="modulepreload" href="src/sim/game.js">
+  <link rel="modulepreload" href="src/render/renderer.js">
+  <link rel="modulepreload" href="src/ui/ui.js">
+  <link rel="modulepreload" href="src/ui/screens.js">
+  <script type="module" src="src/main.js"></script>
+</head>
+<body>
+  <svg class="svg-defs" width="0" height="0" aria-hidden="true" focusable="false">
+    <defs>
+      <linearGradient id="ssCredit" x1="0" y1="0" x2="1" y2="1">
+        <stop offset="0" stop-color="#fff1c2"/>
+        <stop offset=".45" stop-color="#ffb547"/>
+        <stop offset="1" stop-color="#e2650f"/>
+      </linearGradient>
+    </defs>
+  </svg>
+
+  <div id="app" class="app" data-layout="wide">
+    <div id="game" class="game" hidden>
+      <header id="hud" class="hud" aria-label="Game status"></header>
+      <main id="stage" class="stage">
+        <canvas id="view" class="view" tabindex="-1" aria-label="Battlefield. Place towers around the channel."></canvas>
+        <div id="overlay" class="overlay"></div>
+      </main>
+      <aside id="panel" class="panel" aria-label="Arsenal"></aside>
+    </div>
+
+    <div id="screens" class="screens"></div>
+
+    <div id="boot" class="boot" aria-live="polite">
+      <div class="boot__inner">
+        <div class="boot__mark" aria-hidden="true"></div>
+        <div class="boot__name">SHARDSTORM</div>
+        <div class="boot__bar"><i></i></div>
+        <div class="boot__text">Charging the Core</div>
+      </div>
+    </div>
+    <noscript><div class="fatal"><div><b>SHARDSTORM needs JavaScript.</b><span>Turn it on and reload the page.</span></div></div></noscript>
+  </div>
+</body>
+</html>

@@ -1,0 +1,474 @@
+{
+ "sprites": {
+  "keyart": {
+   "src": "img/ui/keyart.jpg",
+   "w": 1536,
+   "h": 1024
+  },
+  "logo": {
+   "src": "img/ui/logo.png",
+   "w": 900,
+   "h": 198
+  },
+  "map_crater": {
+   "src": "img/maps/crater.jpg",
+   "w": 1248,
+   "h": 832
+  },
+  "map_frost": {
+   "src": "img/maps/frost.jpg",
+   "w": 1248,
+   "h": 832
+  },
+  "map_dock": {
+   "src": "img/maps/dock.jpg",
+   "w": 1248,
+   "h": 832
+  },
+  "map_ember": {
+   "src": "img/maps/ember.jpg",
+   "w": 1264,
+   "h": 848
+  },
+  "map_prism": {
+   "src": "img/maps/prism.jpg",
+   "w": 1248,
+   "h": 832
+  },
+  "tower_pulse_0": {
+   "src": "img/towers/tower_pulse_0.png",
+   "size": 66,
+   "rotates": true,
+   "facing": "up"
+  },
+  "tower_scatter_0": {
+   "src": "img/towers/tower_scatter_0.png",
+   "size": 66,
+   "rotates": false,
+   "facing": "up"
+  },
+  "tower_rail_0": {
+   "src": "img/towers/tower_rail_0.png",
+   "size": 70,
+   "rotates": true,
+   "facing": "up"
+  },
+  "tower_missile_0": {
+   "src": "img/towers/tower_missile_0.png",
+   "size": 66,
+   "rotates": true,
+   "facing": "up"
+  },
+  "tower_cryo_0": {
+   "src": "img/towers/tower_cryo_0.png",
+   "size": 66,
+   "rotates": false,
+   "facing": "up"
+  },
+  "tower_tesla_0": {
+   "src": "img/towers/tower_tesla_0.png",
+   "size": 66,
+   "rotates": false,
+   "facing": "up"
+  },
+  "tower_laser_0": {
+   "src": "img/towers/tower_laser_0.png",
+   "size": 66,
+   "rotates": true,
+   "facing": "up"
+  },
+  "tower_drone_0": {
+   "src": "img/towers/tower_drone_0.png",
+   "size": 70,
+   "rotates": false,
+   "facing": "up"
+  },
+  "tower_mortar_0": {
+   "src": "img/towers/tower_mortar_0.png",
+   "size": 66,
+   "rotates": false,
+   "facing": "up"
+  },
+  "tower_gravity_0": {
+   "src": "img/towers/tower_gravity_0.png",
+   "size": 66,
+   "rotates": false,
+   "facing": "up"
+  },
+  "tower_rig_0": {
+   "src": "img/towers/tower_rig_0.png",
+   "size": 72,
+   "rotates": false,
+   "facing": "up"
+  },
+  "tower_beacon_0": {
+   "src": "img/towers/tower_beacon_0.png",
+   "size": 66,
+   "rotates": false,
+   "facing": "up"
+  },
+  "enemy_rust": {
+   "src": "img/enemies/enemy_rust.png",
+   "size": 27,
+   "rotates": false
+  },
+  "enemy_cobalt": {
+   "src": "img/enemies/enemy_cobalt.png",
+   "size": 30,
+   "rotates": false
+  },
+  "enemy_jade": {
+   "src": "img/enemies/enemy_jade.png",
+   "size": 32,
+   "rotates": false
+  },
+  "enemy_amber": {
+   "src": "img/enemies/enemy_amber.png",
+   "size": 32,
+   "rotates": false
+  },
+  "enemy_rose": {
+   "src": "img/enemies/enemy_rose.png",
+   "size": 35,
+   "rotates": false
+  },
+  "enemy_iron": {
+   "src": "img/enemies/enemy_iron.png",
+   "size": 38,
+   "rotates": false
+  },
+  "enemy_magma": {
+   "src": "img/enemies/enemy_magma.png",
+   "size": 35,
+   "rotates": false
+  },
+  "enemy_comet": {
+   "src": "img/enemies/enemy_comet.png",
+   "size": 35,
+   "rotates": false
+  },
+  "enemy_prism": {
+   "src": "img/enemies/enemy_prism.png",
+   "size": 35,
+   "rotates": false
+  },
+  "enemy_geode": {
+   "src": "img/enemies/enemy_geode.png",
+   "size": 40,
+   "rotates": false
+  },
+  "enemy_aurora": {
+   "src": "img/enemies/enemy_aurora.png",
+   "size": 43,
+   "rotates": false
+  },
+  "enemy_obsidian": {
+   "src": "img/enemies/enemy_obsidian.png",
+   "size": 49,
+   "rotates": false
+  },
+  "ship_hauler": {
+   "src": "img/ships/ship_hauler.png",
+   "size": 80,
+   "rotates": true,
+   "facing": "right"
+  },
+  "ship_warbarge": {
+   "src": "img/ships/ship_warbarge.png",
+   "size": 104,
+   "rotates": true,
+   "facing": "right"
+  },
+  "ship_dreadnought": {
+   "src": "img/ships/ship_dreadnought.png",
+   "size": 132,
+   "rotates": true,
+   "facing": "right"
+  },
+  "ship_specter": {
+   "src": "img/ships/ship_specter.png",
+   "size": 72,
+   "rotates": true,
+   "facing": "right"
+  },
+  "ship_worldbreaker": {
+   "src": "img/ships/ship_worldbreaker.png",
+   "size": 170,
+   "rotates": true,
+   "facing": "right"
+  },
+  "portal": {
+   "src": "img/ships/portal.png",
+   "size": 90,
+   "rotates": false,
+   "facing": "right"
+  },
+  "titan_maw": {
+   "src": "img/titans/titan_maw.png",
+   "size": 170,
+   "rotates": true,
+   "facing": "right"
+  },
+  "titan_aegis": {
+   "src": "img/titans/titan_aegis.png",
+   "size": 170,
+   "rotates": true,
+   "facing": "right"
+  },
+  "titan_rift": {
+   "src": "img/titans/titan_rift.png",
+   "size": 170,
+   "rotates": true,
+   "facing": "right"
+  },
+  "core": {
+   "src": "img/titans/core.png",
+   "size": 110,
+   "rotates": false,
+   "facing": "right"
+  },
+  "ui_shield": {
+   "src": "img/titans/ui_shield.png",
+   "size": 32,
+   "rotates": false,
+   "facing": "right"
+  },
+  "ui_integrity": {
+   "src": "img/titans/ui_integrity.png",
+   "size": 32,
+   "rotates": false,
+   "facing": "right"
+  },
+  "hero_vega": {
+   "src": "img/heroes/hero_vega.png",
+   "size": 64,
+   "rotates": false
+  },
+  "hero_nova": {
+   "src": "img/heroes/hero_nova.png",
+   "size": 64,
+   "rotates": false
+  },
+  "hero_brick": {
+   "src": "img/heroes/hero_brick.png",
+   "size": 64,
+   "rotates": false
+  },
+  "tower_pulse_1": {
+   "src": "img/towers/tower_pulse_1.png",
+   "size": 66,
+   "rotates": true,
+   "facing": "up"
+  },
+  "tower_pulse_2": {
+   "src": "img/towers/tower_pulse_2.png",
+   "size": 66,
+   "rotates": true,
+   "facing": "up"
+  },
+  "tower_pulse_3": {
+   "src": "img/towers/tower_pulse_3.png",
+   "size": 66,
+   "rotates": true,
+   "facing": "up"
+  },
+  "tower_scatter_1": {
+   "src": "img/towers/tower_scatter_1.png",
+   "size": 66,
+   "rotates": false,
+   "facing": "up"
+  },
+  "tower_scatter_2": {
+   "src": "img/towers/tower_scatter_2.png",
+   "size": 66,
+   "rotates": false,
+   "facing": "up"
+  },
+  "tower_scatter_3": {
+   "src": "img/towers/tower_scatter_3.png",
+   "size": 66,
+   "rotates": false,
+   "facing": "up"
+  },
+  "tower_rail_1": {
+   "src": "img/towers/tower_rail_1.png",
+   "size": 70,
+   "rotates": true,
+   "facing": "up"
+  },
+  "tower_rail_2": {
+   "src": "img/towers/tower_rail_2.png",
+   "size": 70,
+   "rotates": true,
+   "facing": "up"
+  },
+  "tower_rail_3": {
+   "src": "img/towers/tower_rail_3.png",
+   "size": 70,
+   "rotates": true,
+   "facing": "up"
+  },
+  "tower_missile_1": {
+   "src": "img/towers/tower_missile_1.png",
+   "size": 66,
+   "rotates": true,
+   "facing": "up"
+  },
+  "tower_missile_2": {
+   "src": "img/towers/tower_missile_2.png",
+   "size": 66,
+   "rotates": true,
+   "facing": "up"
+  },
+  "tower_missile_3": {
+   "src": "img/towers/tower_missile_3.png",
+   "size": 66,
+   "rotates": true,
+   "facing": "up"
+  },
+  "tower_cryo_1": {
+   "src": "img/towers/tower_cryo_1.png",
+   "size": 66,
+   "rotates": false,
+   "facing": "up"
+  },
+  "tower_cryo_2": {
+   "src": "img/towers/tower_cryo_2.png",
+   "size": 66,
+   "rotates": false,
+   "facing": "up"
+  },
+  "tower_cryo_3": {
+   "src": "img/towers/tower_cryo_3.png",
+   "size": 66,
+   "rotates": false,
+   "facing": "up"
+  },
+  "tower_tesla_1": {
+   "src": "img/towers/tower_tesla_1.png",
+   "size": 66,
+   "rotates": false,
+   "facing": "up"
+  },
+  "tower_tesla_2": {
+   "src": "img/towers/tower_tesla_2.png",
+   "size": 66,
+   "rotates": false,
+   "facing": "up"
+  },
+  "tower_tesla_3": {
+   "src": "img/towers/tower_tesla_3.png",
+   "size": 66,
+   "rotates": false,
+   "facing": "up"
+  },
+  "tower_laser_1": {
+   "src": "img/towers/tower_laser_1.png",
+   "size": 66,
+   "rotates": true,
+   "facing": "up"
+  },
+  "tower_laser_2": {
+   "src": "img/towers/tower_laser_2.png",
+   "size": 66,
+   "rotates": true,
+   "facing": "up"
+  },
+  "tower_laser_3": {
+   "src": "img/towers/tower_laser_3.png",
+   "size": 66,
+   "rotates": true,
+   "facing": "up"
+  },
+  "tower_drone_1": {
+   "src": "img/towers/tower_drone_1.png",
+   "size": 70,
+   "rotates": false,
+   "facing": "up"
+  },
+  "tower_drone_2": {
+   "src": "img/towers/tower_drone_2.png",
+   "size": 70,
+   "rotates": false,
+   "facing": "up"
+  },
+  "tower_drone_3": {
+   "src": "img/towers/tower_drone_3.png",
+   "size": 70,
+   "rotates": false,
+   "facing": "up"
+  },
+  "tower_mortar_1": {
+   "src": "img/towers/tower_mortar_1.png",
+   "size": 66,
+   "rotates": false,
+   "facing": "up"
+  },
+  "tower_mortar_2": {
+   "src": "img/towers/tower_mortar_2.png",
+   "size": 66,
+   "rotates": false,
+   "facing": "up"
+  },
+  "tower_mortar_3": {
+   "src": "img/towers/tower_mortar_3.png",
+   "size": 66,
+   "rotates": false,
+   "facing": "up"
+  },
+  "tower_gravity_1": {
+   "src": "img/towers/tower_gravity_1.png",
+   "size": 66,
+   "rotates": false,
+   "facing": "up"
+  },
+  "tower_gravity_2": {
+   "src": "img/towers/tower_gravity_2.png",
+   "size": 66,
+   "rotates": false,
+   "facing": "up"
+  },
+  "tower_gravity_3": {
+   "src": "img/towers/tower_gravity_3.png",
+   "size": 66,
+   "rotates": false,
+   "facing": "up"
+  },
+  "tower_rig_1": {
+   "src": "img/towers/tower_rig_1.png",
+   "size": 72,
+   "rotates": false,
+   "facing": "up"
+  },
+  "tower_rig_2": {
+   "src": "img/towers/tower_rig_2.png",
+   "size": 72,
+   "rotates": false,
+   "facing": "up"
+  },
+  "tower_rig_3": {
+   "src": "img/towers/tower_rig_3.png",
+   "size": 72,
+   "rotates": false,
+   "facing": "up"
+  },
+  "tower_beacon_1": {
+   "src": "img/towers/tower_beacon_1.png",
+   "size": 66,
+   "rotates": false,
+   "facing": "up"
+  },
+  "tower_beacon_2": {
+   "src": "img/towers/tower_beacon_2.png",
+   "size": 66,
+   "rotates": false,
+   "facing": "up"
+  },
+  "tower_beacon_3": {
+   "src": "img/towers/tower_beacon_3.png",
+   "size": 66,
+   "rotates": false,
+   "facing": "up"
+  }
+ }
+}

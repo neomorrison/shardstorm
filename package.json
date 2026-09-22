@@ -1,0 +1,15 @@
+{
+  "name": "shardstorm",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "SHARDSTORM: an endless tower defense game",
+  "scripts": {
+    "serve": "node tools/serve.mjs",
+    "snap": "node tools/snap.mjs",
+    "headless": "node tools/headless.mjs"
+  },
+  "devDependencies": {
+    "puppeteer-core": "^23.11.1"
+  }
+}

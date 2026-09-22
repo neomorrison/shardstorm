@@ -1,0 +1,1434 @@
+// In-game HUD: top bar, shop, commander tile, next wave preview, selected tower panel,
+// ability bar, Titan health bar, wave banners and toasts.
+// The UI never mutates sim.state directly; it only calls Sim commands (docs/ARCHITECTURE.md section 6).
+
+import {
+  esc, int, short, money, dec, credits, glyph, icon, dtypeLabel, targetLabel, friendlyReason, clean,
+} from './format.js';
+import { RIG_CAP, SELL_RATE, priceFor, TITAN_EVERY, heroXpNeed, HERO_MAX_LEVEL } from '../data/economy.js';
+
+export const PATH_COLORS = ['#3ef0d8', '#b494ff', '#ffb547'];
+export const PATH_KEYS = [',', '.', '/'];
+const PATH_KEY_LABELS = [',', '.', '/'];
+
+// ---- tiny DOM helpers (diffed writes so per-frame updates stay cheap) -------------------
+
+function el(tag, cls, html) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (html != null) e.innerHTML = html;
+  return e;
+}
+function setText(e, v) {
+  if (!e) return;
+  v = String(v);
+  if (e._t !== v) { e._t = v; e.textContent = v; }
+}
+function setHTML(e, v) {
+  if (!e) return;
+  if (e._h !== v) { e._h = v; e.innerHTML = v; }
+}
+function setClass(e, cls, on) {
+  if (!e) return;
+  on = !!on;
+  const m = e._c || (e._c = {});
+  if (m[cls] !== on) { m[cls] = on; e.classList.toggle(cls, on); }
+}
+function setAttr(e, k, v) {
+  if (!e) return;
+  const m = e._a || (e._a = {});
+  if (m[k] === v) return;
+  m[k] = v;
+  if (v === null || v === false || v === undefined) e.removeAttribute(k);
+  else e.setAttribute(k, v === true ? '' : String(v));
+}
+function setVar(e, k, v) {
+  if (!e) return;
+  const m = e._v || (e._v = {});
+  if (m[k] === v) return;
+  m[k] = v;
+  e.style.setProperty(k, v);
+}
+function setHidden(e, hidden) {
+  if (!e) return;
+  hidden = !!hidden;
+  if (e._hid !== hidden) { e._hid = hidden; e.hidden = hidden; }
+}
+
+function okOf(r) {
+  if (r == null) return false;
+  if (typeof r === 'object') return !!r.ok;
+  return !!r;
+}
+function numOf(r) {
+  if (typeof r === 'number') return r;
+  if (r && typeof r === 'object') return Number(r.value ?? r.amount ?? r.price ?? r.cost ?? 0);
+  return 0;
+}
+
+/** Lock reason for an upgrade card. A taken tier 5 reads as "Tier 5 owned elsewhere". */
+function lockReason(reason, level) {
+  const r = String(reason || '');
+  if (level === 4 && /only one .* at a time|owned|t5/i.test(r)) return 'Tier 5 owned elsewhere';
+  return friendlyReason(r || 'locked');
+}
+
+/** Primary damage type of a tower def or stats block. */
+export function primaryDtype(stats) {
+  const atks = stats?.attacks ? Object.values(stats.attacks) : [];
+  for (const a of atks) if (a && a.dtype) return a.dtype;
+  return null;
+}
+
+// ---- UI ---------------------------------------------------------------------------------
+
+export class UI {
+  /**
+   * @param {object} game  the client controller (src/main.js): data, icons, settings, commands
+   */
+  constructor(game) {
+    this.game = game;
+    this.app = document.getElementById('app');
+    this.hud = document.getElementById('hud');
+    this.panel = document.getElementById('panel');
+    this.overlay = document.getElementById('overlay');
+    this.stage = document.getElementById('stage');
+
+    /** uiState passed to renderer.render (ARCHITECTURE section 8), plus client extras. */
+    this.state = {
+      hoverTowerId: null,
+      selectedTowerId: null,
+      placing: null,          // { type, x, y, valid, price, reason } while the ghost is visible
+      showAllRanges: false,
+      aimingTowerId: null,    // mortar Set Target mode
+      settings: game.settings,
+    };
+    this.placeType = null;    // type being placed (ghost may be hidden while the pointer is off the map)
+    this.placeKeep = false;
+    this.sim = null;
+    this.prices = {};
+    this._frame = 0;
+    this._panelDirty = true;
+    this._panelT = 0;
+    this._abilityKey = '';
+    this._abilityEls = new Map();
+    this._previewWave = -1;
+    this._heroKey = '';
+    this._portraitKey = '';
+    this._lastLeakFlash = 0;
+    this._sellArmedUntil = 0;
+    this._tipFor = null;
+
+    this._buildHud();
+    this._buildOverlay();
+    this._buildPanel();
+  }
+
+  get data() { return this.game.data; }
+
+  // ======================================================================= build (static)
+
+  _buildHud() {
+    const h = this.hud;
+    h.innerHTML = `
+      <div class="hud__stats">
+        <div class="stat stat--lives" title="Core Integrity">
+          <span class="stat__icon">${icon('core')}</span>
+          <span class="stat__body"><span class="stat__v" data-k="lives">0</span><span class="stat__l">Core</span></span>
+        </div>
+        <div class="stat stat--cash" title="Credits">
+          <span class="stat__icon stat__icon--glyph">${glyph('glyph--lg')}</span>
+          <span class="stat__body"><span class="stat__v" data-k="cash">0</span><span class="stat__l">Credits</span></span>
+        </div>
+        <div class="stat stat--wave" title="Wave">
+          <span class="stat__icon">${icon('wave')}</span>
+          <span class="stat__body"><span class="stat__v" data-k="wave">0</span><span class="stat__l">Wave<span class="stat__best" data-k="best">Best 0</span></span></span>
+        </div>
+      </div>
+      <div class="hud__titan-slot"></div>
+      <div class="hud__controls">
+        <button type="button" class="hud-btn hud-btn--speed only-compact" data-act="speed" aria-label="Game speed">1x</button>
+        <div class="seg only-wide" role="group" aria-label="Game speed">
+          <button type="button" class="seg__btn" data-speed="1" aria-label="Normal speed">1x</button>
+          <button type="button" class="seg__btn" data-speed="2" aria-label="Double speed">2x</button>
+          <button type="button" class="seg__btn" data-speed="3" aria-label="Triple speed">3x</button>
+        </div>
+        <button type="button" class="hud-btn hud-btn--auto" data-act="auto" aria-pressed="false" aria-label="Auto-start waves" title="Auto-start waves">
+          ${icon('auto')}<span class="hud-btn__label">Auto</span>
+        </button>
+        <button type="button" class="hud-btn hud-btn--icon" data-act="pause" aria-label="Pause (P)" title="Pause (P)">${icon('pause')}</button>
+        <button type="button" class="wave-btn only-wide" data-act="wave" aria-label="Launch wave">
+          <span class="wave-btn__icon">${icon('play')}</span>
+          <span class="wave-btn__text"><span class="wave-btn__main">Launch Wave 1</span><span class="wave-btn__sub">Space</span></span>
+        </button>
+      </div>`;
+    this.$lives = h.querySelector('[data-k="lives"]');
+    this.$livesStat = h.querySelector('.stat--lives');
+    this.$cash = h.querySelector('[data-k="cash"]');
+    this.$cashStat = h.querySelector('.stat--cash');
+    this.$wave = h.querySelector('[data-k="wave"]');
+    this.$best = h.querySelector('[data-k="best"]');
+    this.$speedBtns = [...h.querySelectorAll('[data-speed]')];
+    this.$speedCycle = h.querySelector('[data-act="speed"]');
+    this.$auto = h.querySelector('[data-act="auto"]');
+    this.$pause = h.querySelector('[data-act="pause"]');
+    this.$waveBtns = [h.querySelector('[data-act="wave"]')];
+
+    h.addEventListener('click', (e) => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      if (b.dataset.speed) this.game.setSpeed(Number(b.dataset.speed));
+      else if (b.dataset.act === 'auto') this.game.toggleAuto();
+      else if (b.dataset.act === 'speed') this.game.cycleSpeed(true);
+      else if (b.dataset.act === 'pause') this.game.pause();
+      else if (b.dataset.act === 'wave') this.game.launchWave();
+      this._blurAfterPointer(b, e);
+    });
+  }
+
+  _buildOverlay() {
+    const o = this.overlay;
+    o.innerHTML = `
+      <div class="titan" hidden aria-live="polite">
+        <div class="titan__label"><span class="titan__tag">Storm Titan</span><span class="titan__name"></span></div>
+        <div class="titan__bar"><div class="titan__hp"></div><div class="titan__shield"></div><span class="titan__num"></span></div>
+      </div>
+      <div class="banners" aria-live="polite"></div>
+      <div class="coach" hidden><span class="coach__step"></span><span class="coach__text"></span></div>
+      <div class="aim-hint" hidden>${icon('target')}<span>Click the map to set the target. Esc to finish.</span></div>
+      <div class="ghost-tag" hidden><span class="ghost-tag__price"></span><span class="ghost-tag__why"></span></div>
+      <div class="touch-place" hidden>
+        <button type="button" class="btn btn--ghost touch-place__cancel">${icon('close')}<span>Cancel</span></button>
+        <button type="button" class="btn btn--primary touch-place__ok">${icon('check')}<span class="touch-place__label">Place</span></button>
+      </div>
+      <div class="abilities" role="toolbar" aria-label="Abilities"></div>
+      <div class="toasts" role="status" aria-live="polite"></div>
+      <div class="fps" hidden></div>`;
+    this.$titan = o.querySelector('.titan');
+    this.$titanName = o.querySelector('.titan__name');
+    this.$titanHp = o.querySelector('.titan__hp');
+    this.$titanShield = o.querySelector('.titan__shield');
+    this.$titanNum = o.querySelector('.titan__num');
+    this.$banners = o.querySelector('.banners');
+    this.$aimHint = o.querySelector('.aim-hint');
+    this.$coach = o.querySelector('.coach');
+    this.$coachStep = o.querySelector('.coach__step');
+    this.$coachText = o.querySelector('.coach__text');
+    this.$ghostTag = o.querySelector('.ghost-tag');
+    this.$ghostPrice = o.querySelector('.ghost-tag__price');
+    this.$ghostWhy = o.querySelector('.ghost-tag__why');
+    this.$touch = o.querySelector('.touch-place');
+    this.$touchOk = o.querySelector('.touch-place__ok');
+    this.$touchLabel = o.querySelector('.touch-place__label');
+    this.$abilities = o.querySelector('.abilities');
+    this.$toasts = o.querySelector('.toasts');
+    this.$fps = o.querySelector('.fps');
+
+    o.querySelector('.touch-place__cancel').addEventListener('click', () => this.cancelPlacing());
+    this.$touchOk.addEventListener('click', () => this.confirmPlace());
+    this.$abilities.addEventListener('click', (e) => {
+      const b = e.target.closest('.ab');
+      if (b) { this.game.useAbility(b.dataset.id); this._blurAfterPointer(b, e); }
+    });
+
+    // tooltip lives at body level so it can float beside the panel
+    this.$tip = el('div', 'tip');
+    this.$tip.hidden = true;
+    this.$tip.setAttribute('role', 'tooltip');
+    document.body.appendChild(this.$tip);
+  }
+
+  _buildPanel() {
+    const p = this.panel;
+    p.innerHTML = `
+      <div class="drawer-head only-compact">
+        <button type="button" class="drawer-toggle" aria-label="Toggle build drawer" aria-expanded="true">${icon('chevdown')}</button>
+        <div class="drawer-head__preview"></div>
+        <button type="button" class="wave-btn wave-btn--compact" data-act="wave" aria-label="Launch wave">
+          <span class="wave-btn__icon">${icon('play')}</span>
+          <span class="wave-btn__text"><span class="wave-btn__main">Wave 1</span></span>
+        </button>
+      </div>
+      <div class="panel__body">
+        <section class="shop" aria-label="Towers">
+          <div class="panel__title"><span>Arsenal</span><span class="panel__hint only-wide">Click or press a key</span></div>
+          <div class="shop__grid"></div>
+          <div class="hero-slot"></div>
+          <div class="preview">
+            <div class="preview__head"><span class="preview__label">Next</span><span class="preview__wave">Wave 1</span><span class="preview__tags"></span></div>
+            <div class="preview__name"></div>
+            <div class="preview__list"></div>
+          </div>
+        </section>
+        <section class="tp" aria-label="Selected tower" hidden></section>
+      </div>`;
+    this.$drawerToggle = p.querySelector('.drawer-toggle');
+    this.$drawerPreview = p.querySelector('.drawer-head__preview');
+    this.$waveBtns.push(p.querySelector('.drawer-head [data-act="wave"]'));
+    this.$shop = p.querySelector('.shop');
+    this.$grid = p.querySelector('.shop__grid');
+    this.$heroSlot = p.querySelector('.hero-slot');
+    this.$previewWave = p.querySelector('.preview__wave');
+    this.$previewTags = p.querySelector('.preview__tags');
+    this.$previewName = p.querySelector('.preview__name');
+    this.$previewList = p.querySelector('.preview__list');
+    this.$tp = p.querySelector('.tp');
+    this.$body = p.querySelector('.panel__body');
+
+    p.querySelector('.drawer-head [data-act="wave"]').addEventListener('click', (e) => {
+      this.game.launchWave();
+      this._blurAfterPointer(e.currentTarget, e);
+    });
+    this.$drawerToggle.addEventListener('click', () => this.setDrawer(!this.game.settings.drawer));
+    this.setDrawer(this.game.settings.drawer !== false, true);
+
+    this.$grid.addEventListener('click', (e) => {
+      const b = e.target.closest('.tile');
+      if (!b) return;
+      this.shopPick(b.dataset.type, e.pointerType === 'touch' || this.game.isTouch);
+      this._blurAfterPointer(b, e);
+    });
+    this.$heroSlot.addEventListener('click', (e) => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      if (b.dataset.heroSelect) this.select(b.dataset.heroSelect);
+      else if (b.dataset.type) this.shopPick(b.dataset.type, this.game.isTouch);
+      this._blurAfterPointer(b, e);
+    });
+
+    // hover tooltips on shop tiles (mouse and keyboard focus)
+    const showTip = (e) => {
+      const b = e.target.closest('.tile, .hero-tile[data-type]');
+      if (!b || this.game.isTouch) return;
+      this._showTip(b);
+    };
+    const hideTip = (e) => {
+      const b = e.target.closest('.tile, .hero-tile[data-type]');
+      if (b && (!e.relatedTarget || !b.contains(e.relatedTarget))) this._hideTip();
+    };
+    for (const c of [this.$grid, this.$heroSlot]) {
+      c.addEventListener('mouseover', showTip);
+      c.addEventListener('mouseout', hideTip);
+      c.addEventListener('focusin', showTip);
+      c.addEventListener('focusout', hideTip);
+    }
+  }
+
+  /** Mouse clicks should not leave focus on HUD buttons (Space would re-trigger them). */
+  _blurAfterPointer(btn, e) {
+    if (e && e.detail > 0 && btn && typeof btn.blur === 'function') btn.blur();
+  }
+
+  setDrawer(open, silent = false) {
+    this.app.classList.toggle('drawer-closed', !open);
+    this.$drawerToggle.setAttribute('aria-expanded', String(open));
+    if (!silent) this.game.updateSettings({ drawer: open });
+    // the stage changes size in compact layout; the renderer reads it on the next frame
+  }
+
+  // ======================================================================= bind / reset
+
+  bind(sim) {
+    this.sim = sim;
+    this.state.hoverTowerId = null;
+    this.state.selectedTowerId = null;
+    this.state.placing = null;
+    this.state.aimingTowerId = null;
+    this.state.showAllRanges = false;
+    this.placeType = null;
+    this._previewWave = -1;
+    this._abilityKey = '';
+    this._heroKey = '';
+    this._panelDirty = true;
+    this.$toasts.innerHTML = '';
+    this.$banners.innerHTML = '';
+    this._abilityEls.clear();
+    this.$abilities.innerHTML = '';
+    this._hideTip();
+    this._buildShop(sim);
+    this._showView('shop');
+    const sk = String(this.game.speedKey || 'f').toUpperCase();
+    for (const btn of this.$speedBtns) btn.title = `${btn.textContent} speed. ${sk} cycles`;
+    if (this.$speedCycle) this.$speedCycle.title = `Game speed. ${sk} cycles`;
+    this._updateTouchControls();
+    this._coach = this.game.settings.coach && sim.state.wave === 0 && sim.state.towers.length === 0 ? 1 : 0;
+    this._seen = new Set();
+    for (let w = 1; w <= Math.min(sim.state.wave, 240); w++) this._markSeen(sim, w);
+    this._renderCoach();
+    this.update(sim, 0);
+  }
+
+  /** Remembers which enemy types (and modifiers) the player has already faced this run. */
+  _markSeen(sim, w) {
+    let list = [];
+    try { list = sim.wavePreview(w) || []; } catch { list = []; }
+    for (const g of list) {
+      this._seen.add(g.type);
+      if (g.mods?.phantom) this._seen.add('mod:phantom');
+      if (g.mods?.nanite) this._seen.add('mod:nanite');
+      if (g.mods?.plated) this._seen.add('mod:plated');
+    }
+  }
+
+  _renderCoach() {
+    const on = !!this._coach;
+    setHidden(this.$coach, !on);
+    if (!on) return;
+    const touch = this.game.isTouch;
+    const key = this.game.layout === 'compact' ? 'below' : 'on the right';
+    if (this._coach === 1) {
+      setText(this.$coachStep, '1');
+      setText(this.$coachText, `Pick a tower ${key}, then ${touch ? 'drag it' : 'place it'} beside the channel.`);
+    } else {
+      setText(this.$coachStep, '2');
+      setText(this.$coachText, touch ? 'Tap the wave button to launch the storm.' : 'Press Space or Launch Wave to start the storm.');
+    }
+  }
+
+  unbind() {
+    this.sim = null;
+    this.state.placing = null;
+    this.placeType = null;
+    this.state.selectedTowerId = null;
+    this.state.aimingTowerId = null;
+    this._hideTip();
+    this._updateTouchControls();
+  }
+
+  _priceOf(sim, type) {
+    try {
+      const v = sim.priceOf(type);
+      const n = numOf(v);
+      if (Number.isFinite(n) && n > 0) return n;
+    } catch { /* fall through */ }
+    const def = this.data.TOWERS[type] || this.data.HEROES[type];
+    return def ? priceFor(def.cost || 0, sim.state.difficulty) : 0;
+  }
+
+  _buildShop(sim) {
+    const { TOWERS, TOWER_ORDER } = this.data;
+    this.prices = {};
+    this.$grid.innerHTML = '';
+    this._tiles = [];
+    for (const type of TOWER_ORDER) {
+      const def = TOWERS[type];
+      if (!def) continue;
+      const price = this._priceOf(sim, type);
+      this.prices[type] = price;
+      const key = (def.hotkey || '').toUpperCase();
+      const b = el('button', 'tile');
+      b.type = 'button';
+      b.dataset.type = type;
+      b.setAttribute('aria-label', `${def.name}, ${int(price)} credits${key ? ', hotkey ' + key : ''}`);
+      b.innerHTML = `
+        <span class="tile__art"><canvas class="tile__icon"></canvas></span>
+        <span class="tile__name">${esc(def.name)}</span>
+        <span class="tile__price">${glyph()}<span>${int(price)}</span></span>
+        ${key ? `<kbd class="tile__key">${esc(key)}</kbd>` : ''}`;
+      this.$grid.appendChild(b);
+      this.game.icons.tower(b.querySelector('canvas'), def, 46, 0);
+      this._tiles.push({ el: b, type, def, price, priceEl: b.querySelector('.tile__price'), isRig: this._isRigDef(type, def) });
+    }
+    this._buildHeroTile(sim);
+  }
+
+  _isRigDef(type) {
+    return type === 'rig';
+  }
+
+  // ======================================================================= commander
+
+  _heroId() {
+    const id = this.sim?.state?.heroId;
+    return id && this.data.HEROES[id] ? id : null;
+  }
+
+  _heroTower() {
+    const id = this._heroId();
+    if (!id || !this.sim) return null;
+    return this.sim.state.towers.find((t) => t.hero || t.isHero || t.type === id || t.def?.hero) || null;
+  }
+
+  _buildHeroTile(sim) {
+    const id = this._heroId();
+    this.$heroSlot.innerHTML = '';
+    this._hero = null;
+    if (!id) return;
+    const def = this.data.HEROES[id];
+    const price = this._priceOf(sim, id);
+    this.prices[id] = price;
+    const b = el('button', 'hero-tile');
+    b.type = 'button';
+    b.dataset.type = id;
+    b.innerHTML = `
+      <span class="hero-tile__art"><canvas></canvas></span>
+      <span class="hero-tile__body">
+        <span class="hero-tile__role">Commander</span>
+        <span class="hero-tile__name">${esc(def.name)}</span>
+        <span class="hero-tile__meta"><span class="hero-tile__price">${glyph()}<span>${int(price)}</span></span><span class="hero-tile__lvl" hidden></span></span>
+        <span class="hero-tile__xp" hidden><i></i></span>
+      </span>
+      <kbd class="tile__key">U</kbd>`;
+    this.$heroSlot.appendChild(b);
+    this.game.icons.hero(b.querySelector('canvas'), def, 48);
+    this._hero = {
+      el: b, id, def, price,
+      priceEl: b.querySelector('.hero-tile__price'),
+      lvlEl: b.querySelector('.hero-tile__lvl'),
+      xpEl: b.querySelector('.hero-tile__xp'),
+      xpFill: b.querySelector('.hero-tile__xp i'),
+      keyEl: b.querySelector('.tile__key'),
+    };
+  }
+
+  /** Level/XP summary for a hero tower, tolerant of how the engine stores it. */
+  heroProgress(t) {
+    if (!t) return null;
+    let info = null;
+    try { info = this.sim?.towerInfo?.(t.id) || null; } catch { info = null; }
+    const src = [info?.hero, info, t.hero && typeof t.hero === 'object' ? t.hero : null, t.data, t];
+    const pick = (k) => { for (const o of src) if (o && Number.isFinite(o[k])) return o[k]; return undefined; };
+    const level = pick('level') ?? pick('lvl') ?? 1;
+    const max = level >= HERO_MAX_LEVEL;
+    const xp = pick('xp') ?? 0;
+    const need = max ? 0 : (pick('xpNeed') || pick('xpNext') || heroXpNeed(level));
+    const frac = max ? 1 : (need ? Math.min(1, xp / need) : 0);
+    return { level, xp, need, frac, max };
+  }
+
+  // ======================================================================= shop / placing
+
+  shopPick(type, touch = false) {
+    const sim = this.sim;
+    if (!sim || this.game.over) return;
+    if (this.placeType === type) { this.cancelPlacing(); return; }
+    const price = this.prices[type] ?? this._priceOf(sim, type);
+    if (this._heroId() === type && this._heroTower()) {
+      this.select(this._heroTower().id);
+      return;
+    }
+    if (sim.state.cash < price) {
+      this.toast('Not enough credits', 'bad');
+      this._nudge(type);
+      return;
+    }
+    const tile = this._tiles?.find((t) => t.type === type);
+    if (tile?.isRig && sim.state.rigCount >= RIG_CAP) {
+      this.toast(`Mining Rig limit reached (${RIG_CAP})`, 'bad');
+      this._nudge(type);
+      return;
+    }
+    this.deselect();
+    this.state.aimingTowerId = null;
+    this.placeType = type;
+    this.placeKeep = false;
+    this._hideTip();
+    if (touch) {
+      // touch: drop the ghost in the middle of the visible map; drag to move, tap Place to confirm
+      const c = this.game.canvasCenterWorld();
+      this.moveGhost(c.x, c.y);
+    } else if (this.game.pointerWorld) {
+      const p = this.game.pointerWorld;
+      if (p.inside) this.moveGhost(p.x, p.y);
+    }
+    this._updateTiles(true);
+    this._updateTouchControls();
+  }
+
+  _nudge(type) {
+    const t = this._tiles?.find((x) => x.type === type)?.el || (this._hero?.id === type ? this._hero.el : null);
+    if (!t) return;
+    t.classList.remove('nudge');
+    void t.offsetWidth;
+    t.classList.add('nudge');
+  }
+
+  /** Move (or show) the placement ghost at a world position. */
+  moveGhost(x, y) {
+    const sim = this.sim;
+    const type = this.placeType;
+    if (!sim || !type) return;
+    let valid = false, reason = null, price = this.prices[type] ?? 0;
+    try {
+      const r = sim.canPlace(type, x, y);
+      valid = okOf(r);
+      reason = valid ? null : (r && r.reason) || 'blocked';
+    } catch { valid = false; reason = 'blocked'; }
+    try {
+      const p = numOf(sim.priceAt(type, x, y));
+      if (p > 0) price = p;
+    } catch { /* keep base price */ }
+    if (valid && sim.state.cash < price) { valid = false; reason = 'cash'; }
+    this.state.placing = { type, x, y, valid, price, reason };
+    this._updateTouchControls();
+  }
+
+  hideGhost() {
+    if (this.state.placing) this.state.placing = null;
+  }
+
+  confirmPlace(keep = false) {
+    const sim = this.sim;
+    const p = this.state.placing;
+    if (!sim || !p) return false;
+    const type = p.type;
+    let r;
+    try {
+      r = this._heroId() === type && typeof sim.placeHero === 'function'
+        ? sim.placeHero(p.x, p.y)
+        : sim.placeTower(type, p.x, p.y);
+    } catch (err) {
+      console.error(err);
+      r = { ok: false, reason: 'invalid' };
+    }
+    if (!okOf(r)) {
+      this.toast(friendlyReason(r?.reason || p.reason), 'bad');
+      return false;
+    }
+    const price = this.prices[type] ?? 0;
+    const again = keep && this._heroId() !== type && sim.state.cash >= price;
+    if (again) {
+      this.moveGhost(p.x, p.y);
+    } else {
+      this.cancelPlacing();
+    }
+    this._panelDirty = true;
+    return true;
+  }
+
+  cancelPlacing() {
+    this.placeType = null;
+    this.state.placing = null;
+    this._updateTiles(true);
+    this._updateTouchControls();
+  }
+
+  get placing() { return !!this.placeType; }
+
+  _updateTouchControls() {
+    const show = !!this.placeType && this.game.isTouch;
+    setHidden(this.$touch, !show);
+    if (show) {
+      const p = this.state.placing;
+      const price = p?.price ?? this.prices[this.placeType] ?? 0;
+      setHTML(this.$touchLabel, `Place ${credits(price)}`);
+      this.$touchOk.disabled = !p || !p.valid;
+    }
+  }
+
+  // ======================================================================= selection
+
+  select(id) {
+    if (!this.sim) return;
+    const t = this._tower(id);
+    if (!t) return;
+    if (this.placeType) this.cancelPlacing();
+    if (this.state.selectedTowerId !== t.id) this.state.aimingTowerId = null;
+    this.state.selectedTowerId = t.id;
+    this._buildTowerPanel(t);
+    this._showView('tower');
+    this._panelDirty = true;
+    this._refreshTowerPanel(true);
+    if (this.game.layout === 'compact' && !this.game.settings.drawer) this.setDrawer(true);
+  }
+
+  deselect() {
+    if (this.state.selectedTowerId == null && this.state.aimingTowerId == null) return;
+    this.state.selectedTowerId = null;
+    this.state.aimingTowerId = null;
+    this._sellArmedUntil = 0;
+    this._showView('shop');
+  }
+
+  _showView(v) {
+    const tower = v === 'tower';
+    setHidden(this.$shop, tower);
+    setHidden(this.$tp, !tower);
+    this.panel.dataset.view = v;
+    if (tower) this.$body.scrollTop = 0;
+  }
+
+  _tower(id) {
+    if (!this.sim || id == null) return null;
+    const ts = this.sim.state.towers;
+    for (let i = 0; i < ts.length; i++) if (ts[i].id === id || String(ts[i].id) === String(id)) return ts[i];
+    return null;
+  }
+
+  _defOf(t) {
+    return t.def || this.data.TOWERS[t.type] || this.data.HEROES[t.type] || { name: t.type, paths: [] };
+  }
+
+  _isHero(t) {
+    return !!(t && (t.hero || t.isHero || t.def?.hero || (this.data.HEROES[t.type] && !this.data.TOWERS[t.type])));
+  }
+
+  _variant(t) {
+    const def = this._defOf(t);
+    try { return def.art?.variant ? def.art.variant(t.levels || [0, 0, 0]) || 0 : 0; } catch { return 0; }
+  }
+
+  _buildTowerPanel(t) {
+    const def = this._defOf(t);
+    const hero = this._isHero(t);
+    const paths = hero ? [] : (def.paths || []).slice(0, 3);
+    const tp = this.$tp;
+    tp.innerHTML = `
+      <header class="tp__head">
+        <span class="tp__art"><canvas class="tp__portrait"></canvas></span>
+        <div class="tp__id">
+          <h2 class="tp__name">${esc(def.name)}</h2>
+          <div class="tp__sub"><span class="tp__levels"></span><span class="tp__dtype"></span></div>
+        </div>
+        <button type="button" class="icon-btn tp__close" aria-label="Close (Esc)" title="Close (Esc)">${icon('close')}</button>
+      </header>
+      <div class="tp__stats">
+        <div class="kv"><span class="kv__k">Pops</span><span class="kv__v" data-k="pops">0</span></div>
+        <div class="kv"><span class="kv__k">Damage</span><span class="kv__v" data-k="dmg">0</span></div>
+        <div class="kv" data-row="cash"><span class="kv__k">Credits</span><span class="kv__v kv__v--cr" data-k="cash">0</span></div>
+      </div>
+      <div class="tp__hero" hidden>
+        <div class="tp__hero-top"><span class="tp__lvl">Level 1</span><span class="tp__xp-text"></span></div>
+        <div class="xpbar"><i></i></div>
+        <div class="tp__hero-notes"></div>
+      </div>
+      <div class="tp__target">
+        <span class="tp__label">Target</span>
+        <button type="button" class="icon-btn icon-btn--sm" data-act="tprev" aria-label="Previous targeting mode">${icon('left')}</button>
+        <span class="tp__mode" aria-live="polite">First</span>
+        <button type="button" class="icon-btn icon-btn--sm" data-act="tnext" aria-label="Next targeting mode (Tab)">${icon('right')}</button>
+        <kbd class="tp__kbd only-wide">Tab</kbd>
+      </div>
+      <div class="tp__extra">
+        <button type="button" class="btn btn--sm btn--ghost tp__aim" data-act="aim" hidden>${icon('target')}<span>Set Target</span></button>
+        <button type="button" class="btn btn--sm btn--credit tp__vault" data-act="withdraw" hidden>${icon('vault')}<span>Withdraw</span><span class="tp__vault-amt"></span></button>
+      </div>
+      <div class="tp__paths">
+        ${paths.map((p, i) => `
+          <button type="button" class="up" data-path="${i}" style="--path:${PATH_COLORS[i]}">
+            <span class="up__top">
+              <span class="up__path">${esc(p.name || 'Path ' + (i + 1))}</span>
+              <span class="pips">${[0, 1, 2, 3, 4].map((k) => `<i class="pip" title="${esc(p.upgrades?.[k]?.name || '')}"></i>`).join('')}</span>
+              <kbd class="up__key only-wide">${PATH_KEY_LABELS[i]}</kbd>
+            </span>
+            <span class="up__name"></span>
+            <span class="up__desc"></span>
+            <span class="up__foot"><span class="up__state"></span><span class="up__price"></span></span>
+          </button>`).join('')}
+      </div>
+      <footer class="tp__foot">
+        <button type="button" class="btn btn--sell" data-act="sell">
+          ${icon('sell')}<span class="btn-sell__label">Sell</span><span class="btn-sell__val"></span>
+        </button>
+        <span class="tp__foot-note"></span>
+      </footer>`;
+    const q = (s) => tp.querySelector(s);
+    this.tp = {
+      id: t.id, def, hero,
+      portrait: q('.tp__portrait'), levels: q('.tp__levels'), dtype: q('.tp__dtype'),
+      pops: q('[data-k="pops"]'), dmg: q('[data-k="dmg"]'), cash: q('[data-k="cash"]'), cashRow: q('[data-row="cash"]'),
+      heroBox: q('.tp__hero'), lvl: q('.tp__lvl'), xpText: q('.tp__xp-text'), xpFill: q('.xpbar i'), heroNotes: q('.tp__hero-notes'),
+      target: q('.tp__target'), mode: q('.tp__mode'),
+      aim: q('.tp__aim'), vault: q('.tp__vault'), vaultAmt: q('.tp__vault-amt'), extra: q('.tp__extra'),
+      paths: [...tp.querySelectorAll('.up')].map((b) => ({
+        el: b, pips: [...b.querySelectorAll('.pip')], name: b.querySelector('.up__name'), desc: b.querySelector('.up__desc'),
+        state: b.querySelector('.up__state'), price: b.querySelector('.up__price'),
+      })),
+      sell: q('.btn--sell'), sellLabel: q('.btn-sell__label'), sellVal: q('.btn-sell__val'), footNote: q('.tp__foot-note'),
+    };
+    this._portraitKey = '';
+    tp.onclick = (e) => {
+      const b = e.target.closest('button');
+      if (!b) return;
+      if (b.classList.contains('tp__close')) this.deselect();
+      else if (b.classList.contains('up')) this.upgradeSelected(Number(b.dataset.path));
+      else if (b.dataset.act === 'tprev') this.cycleTargeting(-1);
+      else if (b.dataset.act === 'tnext') this.cycleTargeting(1);
+      else if (b.dataset.act === 'aim') this.toggleAim();
+      else if (b.dataset.act === 'withdraw') this.withdraw();
+      else if (b.dataset.act === 'sell') this.sellSelected(true);
+      this._blurAfterPointer(b, e);
+    };
+  }
+
+  _refreshTowerPanel(force = false) {
+    const sim = this.sim;
+    const id = this.state.selectedTowerId;
+    if (!sim || id == null || !this.tp) return;
+    const t = this._tower(id);
+    if (!t) { this.deselect(); return; }
+    const tp = this.tp;
+    const def = tp.def;
+    let info = {};
+    try { info = sim.towerInfo(t.id) || {}; } catch { info = {}; }
+    const levels = t.levels || info.levels || [0, 0, 0];
+
+    // portrait (changes look at tier 3+)
+    const variant = this._variant(t);
+    const pk = `${t.type}:${variant}`;
+    if (force || pk !== this._portraitKey) {
+      this._portraitKey = pk;
+      if (tp.hero) this.game.icons.hero(tp.portrait, def, 60);
+      else this.game.icons.tower(tp.portrait, def, 60, variant);
+    }
+
+    setText(tp.levels, tp.hero ? 'Commander' : levels.join('-'));
+    const dt = primaryDtype(t.stats) || primaryDtype(def.base);
+    const det = t.stats?.detection || info.detection;
+    setHTML(tp.dtype, [dt ? esc(dtypeLabel(dt)) : null, det ? '<span class="tp__det">Detection</span>' : null].filter(Boolean).join('<span class="dot"></span>'));
+
+    setText(tp.pops, short(info.pops ?? t.pops ?? 0));
+    setText(tp.dmg, short(info.damage ?? t.damage ?? 0));
+    const earned = info.cashEarned ?? t.cashEarned ?? 0;
+    const showCash = earned > 0 || !!t.stats?.income;
+    setHidden(tp.cashRow, !showCash);
+    if (showCash) setHTML(tp.cash, credits(earned));
+
+    // commander
+    setHidden(tp.heroBox, !tp.hero);
+    if (tp.hero) {
+      const hp = this.heroProgress(t);
+      setText(tp.lvl, hp.max ? 'Level 20 (max)' : `Level ${hp.level}`);
+      setText(tp.xpText, hp.max ? '' : hp.need ? `${int(hp.xp)} / ${int(hp.need)} XP` : '');
+      setVar(tp.xpFill.parentElement, '--fill', String(hp.frac));
+      setHTML(tp.heroNotes, this._heroNotes(def, hp.level, info));
+    }
+
+    // targeting
+    const modes = info.modes || t.stats?.targetModes || def.base?.targetModes || ['first', 'last', 'strong', 'close'];
+    const atkCount = t.stats?._attackList ? t.stats._attackList.length : Object.keys(t.stats?.attacks || {}).length;
+    const noTarget = !modes || modes.length === 0 || (atkCount === 0 && !tp.hero);
+    setHidden(tp.target, noTarget);
+    setText(tp.mode, targetLabel(info.targeting || t.targeting));
+
+    // mortar aim, vault withdraw
+    const mortar = typeof info.aimable === 'boolean' ? info.aimable : this._hasMortar(t);
+    setHidden(tp.aim, !mortar);
+    if (mortar) {
+      setClass(tp.aim, 'is-active', this.state.aimingTowerId === t.id);
+      setAttr(tp.aim, 'aria-pressed', String(this.state.aimingTowerId === t.id));
+    }
+    const vault = t.stats?.income?.vault;
+    setHidden(tp.vault, !vault);
+    if (vault) {
+      const bal = Number(t.data?.vault ?? t.data?.vaultBalance ?? info.vault ?? 0);
+      setHTML(tp.vaultAmt, credits(bal));
+      tp.vault.disabled = !(bal >= 1);
+    }
+    setHidden(tp.extra, !mortar && !vault);
+
+    // upgrade paths
+    const cash = sim.state.cash;
+    for (let p = 0; p < tp.paths.length; p++) {
+      const ui = tp.paths[p];
+      const path = def.paths?.[p];
+      const lv = levels[p] || 0;
+      let u = null;
+      try { u = sim.upgradeInfo(t.id, p); } catch { u = null; }
+      let state = u?.state || (lv >= 5 ? 'maxed' : 'locked');
+      const next = path?.upgrades?.[lv];
+      const cost = Number(u?.cost ?? 0);
+      if (state === 'available' && cash < cost) state = 'unaffordable';
+      if (state === 'unaffordable' && cash >= cost && cost > 0) state = 'available';
+      setAttr(ui.el, 'data-state', state);
+      for (let k = 0; k < 5; k++) {
+        setClass(ui.pips[k], 'on', k < lv);
+        setClass(ui.pips[k], 'next', k === lv && (state === 'available' || state === 'unaffordable'));
+      }
+      if (state === 'maxed') {
+        const top = path?.upgrades?.[Math.max(0, lv - 1)];
+        setText(ui.name, top ? clean(top.name) : 'Maxed');
+        setText(ui.desc, top ? clean(top.desc) : '');
+        setHTML(ui.state, `${icon('star')}<span>Max tier</span>`);
+        setAttr(ui.state, 'title', null);
+        setHTML(ui.price, '');
+        setAttr(ui.el, 'aria-disabled', 'true');
+        setAttr(ui.el, 'aria-label', `${path?.name || 'Path'}: max tier`);
+      } else if (state === 'locked') {
+        setText(ui.name, clean(u?.name || next?.name || ''));
+        setText(ui.desc, clean(u?.desc || next?.desc || ''));
+        const why = lockReason(u?.reason, lv);
+        setHTML(ui.state, `${icon('lock')}<span>${esc(why)}</span>`);
+        setAttr(ui.state, 'title', u?.reason ? clean(u.reason) : null);
+        setHTML(ui.price, '');
+        setAttr(ui.el, 'aria-disabled', 'true');
+        setAttr(ui.el, 'aria-label', `${path?.name || 'Path'}: locked. ${why}`);
+      } else {
+        const nm = clean(u?.name || next?.name || '');
+        setText(ui.name, nm);
+        setText(ui.desc, clean(u?.desc || next?.desc || ''));
+        setHTML(ui.state, `<span class="up__tier">Tier ${lv + 1}</span>`);
+        setAttr(ui.state, 'title', null);
+        setHTML(ui.price, credits(cost));
+        setAttr(ui.el, 'aria-disabled', state === 'available' ? null : 'true');
+        setAttr(ui.el, 'aria-label', `Upgrade ${path?.name || ''}: ${nm}, ${int(cost)} credits${state === 'unaffordable' ? ', not enough credits' : ''}. Hotkey ${PATH_KEY_LABELS[p]}`);
+      }
+    }
+
+    // sell / undo
+    let sv = 0;
+    try { sv = numOf(sim.sellValue(t.id)); } catch { sv = 0; }
+    const undo = !!t.undoable;
+    const armed = performance.now() < this._sellArmedUntil;
+    setText(tp.sellLabel, armed ? 'Confirm' : undo ? 'Undo' : 'Sell');
+    setHTML(tp.sellVal, credits(sv));
+    setClass(tp.sell, 'is-undo', undo);
+    setClass(tp.sell, 'is-armed', armed);
+    setAttr(tp.sell, 'aria-label', `${undo ? 'Undo placement, full refund' : 'Sell'} for ${int(sv)} credits (Delete)`);
+    setText(tp.footNote, undo ? 'Full refund until the next wave' : `Refunds ${Math.round(SELL_RATE * 100)}% of credits paid`);
+  }
+
+  _heroNotes(def, level, info) {
+    const list = def.abilities || def.skills || null;
+    if (Array.isArray(list) && list.length) {
+      return `<ul class="hero-abil">${list.map((a) => {
+        const lvl = a.level ?? a.unlock ?? 0;
+        const on = level >= lvl;
+        return `<li class="${on ? 'on' : ''}"><span class="hero-abil__lvl">L${lvl}</span><span class="hero-abil__name">${esc(clean(a.name || ''))}</span></li>`;
+      }).join('')}</ul>`;
+    }
+    const have = (info?.abilities || []).map((a) => `<li class="on"><span class="hero-abil__lvl">${icon('bolt')}</span><span class="hero-abil__name">${esc(clean(a.name || a.id))}</span></li>`).join('');
+    const next = level < 3 ? 'First ability at level 3'
+      : level < 10 ? 'Second ability at level 10'
+        : level < 16 ? 'Abilities grow stronger at level 16'
+          : level < 20 ? 'Full power at level 20' : 'Full power';
+    return `${have ? `<ul class="hero-abil">${have}</ul>` : ''}<p class="hero-next">${esc(next)}</p>`;
+  }
+
+  _hasMortar(t) {
+    const atks = t.stats?.attacks || this._defOf(t).base?.attacks || {};
+    return Object.values(atks).some((a) => a && a.kind === 'mortar');
+  }
+
+  // ======================================================================= commands on selection
+
+  upgradeSelected(path) {
+    const sim = this.sim;
+    const id = this.state.selectedTowerId;
+    if (!sim || id == null || this.game.over) return;
+    const t = this._tower(id);
+    if (!t || this._isHero(t)) return;
+    let r;
+    try { r = sim.upgrade(t.id, path); } catch (err) { console.error(err); r = { ok: false, reason: 'invalid' }; }
+    if (!okOf(r)) {
+      let u = null;
+      try { u = sim.upgradeInfo(t.id, path); } catch { u = null; }
+      const why = u?.state === 'unaffordable' ? 'Not enough credits'
+        : u?.state === 'maxed' ? 'Path maxed'
+          : friendlyReason(r?.reason || u?.reason);
+      this.toast(why, 'bad');
+      const card = this.tp?.paths?.[path]?.el;
+      if (card) { card.classList.remove('nudge'); void card.offsetWidth; card.classList.add('nudge'); }
+    } else {
+      const card = this.tp?.paths?.[path]?.el;
+      if (card) { card.classList.remove('bought'); void card.offsetWidth; card.classList.add('bought'); }
+    }
+    this._panelDirty = true;
+    this._refreshTowerPanel();
+  }
+
+  cycleTargeting(dir = 1) {
+    const sim = this.sim;
+    const t = this._tower(this.state.selectedTowerId);
+    if (!sim || !t) return;
+    let info = {};
+    try { info = sim.towerInfo(t.id) || {}; } catch { info = {}; }
+    const modes = info.modes || t.stats?.targetModes || this._defOf(t).base?.targetModes || ['first', 'last', 'strong', 'close'];
+    if (!modes.length) return;
+    const cur = modes.indexOf(info.targeting || t.targeting);
+    const next = modes[(cur + dir + modes.length) % modes.length];
+    try { sim.setTargeting(t.id, next); } catch (err) { console.error(err); }
+    this._refreshTowerPanel();
+  }
+
+  toggleAim() {
+    const t = this._tower(this.state.selectedTowerId);
+    if (!t) return;
+    this.state.aimingTowerId = this.state.aimingTowerId === t.id ? null : t.id;
+    if (this.state.aimingTowerId && this.placeType) this.cancelPlacing();
+    this._refreshTowerPanel();
+  }
+
+  setAim(x, y) {
+    const sim = this.sim;
+    const id = this.state.aimingTowerId;
+    if (!sim || id == null) return false;
+    let r;
+    try { r = sim.setAim(id, x, y); } catch (err) { console.error(err); r = { ok: false }; }
+    if (r && typeof r === 'object' && r.ok === false) this.toast(friendlyReason(r.reason), 'bad');
+    return true;
+  }
+
+  withdraw() {
+    const sim = this.sim;
+    const t = this._tower(this.state.selectedTowerId);
+    if (!sim || !t) return;
+    let r;
+    try { r = sim.withdraw(t.id); } catch (err) { console.error(err); r = { ok: false }; }
+    if (!okOf(r)) this.toast(friendlyReason(r?.reason || 'Vault is empty'), 'bad');
+    else {
+      const amt = numOf(r);
+      if (amt > 0) this.toast(`Withdrew ${int(amt)} credits`, 'good');
+    }
+    this._refreshTowerPanel();
+  }
+
+  /** Sell the selected tower. From the keyboard the first press arms, the second confirms. */
+  sellSelected(immediate = false) {
+    const sim = this.sim;
+    const t = this._tower(this.state.selectedTowerId);
+    if (!sim || !t || this.game.over) return;
+    const now = performance.now();
+    if (!immediate && now >= this._sellArmedUntil) {
+      this._sellArmedUntil = now + 2200;
+      let sv = 0;
+      try { sv = numOf(sim.sellValue(t.id)); } catch { sv = 0; }
+      this.toast(`Press again to ${t.undoable ? 'undo' : 'sell'} for ${int(sv)} credits`, 'info');
+      this._refreshTowerPanel();
+      return;
+    }
+    this._sellArmedUntil = 0;
+    let r;
+    try { r = sim.sell(t.id); } catch (err) { console.error(err); r = { ok: false, reason: 'invalid' }; }
+    if (!okOf(r)) { this.toast(friendlyReason(r?.reason), 'bad'); return; }
+    this.deselect();
+  }
+
+  // ======================================================================= events
+
+  onEvents(events) {
+    for (let i = 0; i < events.length; i++) {
+      const e = events[i];
+      switch (e.t) {
+        case 'waveStart':
+          if (this.sim && this._seen) this._markSeen(this.sim, e.wave);
+          if (this._coach) { this._coach = 0; this._renderCoach(); this.game.updateSettings({ coach: false }); }
+          this.banner(`Wave ${e.wave}`, e.name || (e.titan || e.wave % TITAN_EVERY === 0 ? 'Titan wave' : ''), 'wave');
+          if (e.tip && !this.game.over) this.toast(e.tip, 'tip', 7000);
+          this._previewWave = -1;
+          break;
+        case 'waveCleared':
+          this.banner(`Wave ${e.wave} cleared`, e.bonus ? `+${int(e.bonus)} bonus` : '', 'clear');
+          this._panelDirty = true;
+          break;
+        case 'titan':
+          this.banner(e.name || 'Storm Titan', 'A Storm Titan approaches', 'titan');
+          break;
+        case 'titanDown':
+          this.banner('Titan destroyed', e.name || '', 'win');
+          break;
+        case 'heroLevel': {
+          const def = this.data.HEROES[e.type];
+          this.toast(`${def?.name || 'Commander'} reached level ${e.level}`, 'good');
+          this._panelDirty = true;
+          break;
+        }
+        case 'leak': {
+          const now = performance.now();
+          if (now - this._lastLeakFlash > 120) {
+            this._lastLeakFlash = now;
+            this.$livesStat.classList.remove('hit');
+            void this.$livesStat.offsetWidth;
+            this.$livesStat.classList.add('hit');
+          }
+          break;
+        }
+        case 'place':
+        case 'upgrade':
+        case 'sell':
+          if (e.t === 'upgrade' && e.tier === 5) {
+            const def = this.data.TOWERS[e.type];
+            this.banner(e.name || 'Tier 5', `${def?.name || 'Tower'} reaches tier 5`, 'win');
+          }
+          if (e.t === 'place' && this._coach === 1) { this._coach = 2; this._renderCoach(); }
+          this._panelDirty = true;
+          if (e.t === 'sell' && (e.tower === this.state.selectedTowerId)) this.deselect();
+          if (this.placeType && this.state.placing) {
+            const p = this.state.placing;
+            this.moveGhost(p.x, p.y);
+          }
+          break;
+        case 'cash':
+          if (e.reason === 'wave' || e.reason === 'bonus') this._pulseCash();
+          break;
+        default:
+          break;
+      }
+    }
+  }
+
+  _pulseCash() {
+    this.$cashStat.classList.remove('gain');
+    void this.$cashStat.offsetWidth;
+    this.$cashStat.classList.add('gain');
+  }
+
+  // ======================================================================= per-frame update
+
+  update(sim, dt) {
+    if (!sim) return;
+    this._frame++;
+    const s = sim.state;
+
+    // --- top bar
+    setText(this.$lives, int(Math.max(0, s.lives)));
+    const lowLives = s.maxLives > 1 ? s.lives / s.maxLives <= 0.25 : false;
+    setClass(this.$livesStat, 'low', lowLives && s.lives > 0);
+    setText(this.$cash, money(s.cash));
+    setText(this.$wave, String(s.wave));
+    const best = Math.max(this.game.run?.best || 0, s.cleared || 0);
+    setText(this.$best, `Best ${best}`);
+    for (const b of this.$speedBtns) {
+      const on = Number(b.dataset.speed) === this.game.speed;
+      setClass(b, 'is-on', on);
+      setAttr(b, 'aria-pressed', String(on));
+    }
+    setText(this.$speedCycle, `${this.game.speed}x`);
+    setClass(this.$speedCycle, 'is-fast', this.game.speed > 1);
+    setAttr(this.$speedCycle, 'aria-label', `Game speed ${this.game.speed}x. Tap to change`);
+    const auto = !!s.autoStart;
+    setClass(this.$auto, 'is-on', auto);
+    setAttr(this.$auto, 'aria-pressed', String(auto));
+    this._updateWaveButtons(sim);
+
+    // --- shop affordability
+    this._updateTiles(false);
+    this._updateHeroTile(sim);
+
+    // --- next wave preview
+    if (s.wave !== this._previewWave) this._updatePreview(sim);
+
+    // --- selected tower panel (throttled)
+    this._panelT += dt;
+    if (this.state.selectedTowerId != null && (this._panelDirty || this._panelT > 0.12)) {
+      this._panelT = 0;
+      this._panelDirty = false;
+      this._refreshTowerPanel();
+    }
+    if (this._sellArmedUntil && performance.now() > this._sellArmedUntil) {
+      this._sellArmedUntil = 0;
+      this._refreshTowerPanel();
+    }
+
+    // --- abilities
+    if ((this._frame & 1) === 0) this._updateAbilities(sim);
+
+    // --- titan
+    this._updateTitan(s);
+
+    // --- aim hint, coach, ghost tag
+    setHidden(this.$aimHint, this.state.aimingTowerId == null);
+    if (this._coach) setHidden(this.$coach, this.state.aimingTowerId != null || !!s.titan);
+    this._updateGhostTag();
+    if (this.game.isTouch) this._updateTouchControls();
+  }
+
+  _updateWaveButtons(sim) {
+    const s = sim.state;
+    const next = s.wave + 1;
+    let can = false;
+    try { can = okOf(sim.canStartWave()); } catch { can = false; }
+    let label, mode, disabled = false, sub = 'Space';
+    if (s.phase === 'over' || this.game.over) { label = 'Core lost'; mode = 'over'; disabled = true; sub = ''; }
+    else if (s.phase === 'build') { label = `Launch Wave ${next}`; mode = 'launch'; disabled = !can; }
+    else if (can) { label = `Send Wave ${next} early`; mode = 'early'; }
+    else { label = `Wave ${s.wave} spawning`; mode = 'busy'; disabled = true; sub = 'Wait for the last spawn'; }
+    const titan = next % TITAN_EVERY === 0 && mode !== 'busy' && mode !== 'over';
+    const compactLabel = mode === 'launch' ? `Wave ${next}` : mode === 'early' ? `Send ${next}` : mode === 'busy' ? `Wave ${s.wave}` : 'Over';
+    for (let i = 0; i < this.$waveBtns.length; i++) {
+      const b = this.$waveBtns[i];
+      if (!b) continue;
+      const main = b.querySelector('.wave-btn__main');
+      setText(main, i === 0 ? label : compactLabel);
+      const subEl = b.querySelector('.wave-btn__sub');
+      if (subEl) setText(subEl, titan ? 'Titan wave' : sub);
+      setAttr(b, 'data-mode', mode);
+      setClass(b, 'is-titan', titan);
+      setAttr(b, 'aria-disabled', disabled ? 'true' : null);
+      setAttr(b, 'aria-label', `${label}${titan ? ', Titan wave' : ''} (Space)`);
+      const ic = b.querySelector('.wave-btn__icon');
+      setHTML(ic, mode === 'early' ? icon('fast') : icon('play'));
+    }
+  }
+
+  _updateTiles(force) {
+    if (!this._tiles || !this.sim) return;
+    const s = this.sim.state;
+    for (const tile of this._tiles) {
+      const capped = tile.isRig && s.rigCount >= RIG_CAP;
+      const poor = s.cash < tile.price;
+      setClass(tile.el, 'is-poor', poor);
+      setClass(tile.el, 'is-capped', capped);
+      setClass(tile.el, 'is-active', this.placeType === tile.type);
+      if (force) setAttr(tile.el, 'aria-pressed', String(this.placeType === tile.type));
+    }
+  }
+
+  _updateHeroTile(sim) {
+    const h = this._hero;
+    if (!h) return;
+    const tower = this._heroTower();
+    const s = sim.state;
+    if (tower) {
+      const hp = this.heroProgress(tower);
+      const key = `on:${hp.level}:${Math.round(hp.frac * 50)}:${this.state.selectedTowerId === tower.id}`;
+      if (key !== this._heroKey) {
+        this._heroKey = key;
+        h.el.dataset.heroSelect = String(tower.id);
+        delete h.el.dataset.type;
+        setHidden(h.priceEl, true);
+        setHidden(h.lvlEl, false);
+        setHidden(h.xpEl, false);
+        setHidden(h.keyEl, true);
+        setText(h.lvlEl, hp.max ? 'Level 20' : `Level ${hp.level}`);
+        setVar(h.xpEl, '--fill', String(hp.frac));
+        setClass(h.el, 'is-deployed', true);
+        setClass(h.el, 'is-selected', this.state.selectedTowerId === tower.id);
+        setAttr(h.el, 'aria-label', `${h.def.name}, level ${hp.level}. Select`);
+      }
+    } else {
+      const key = `off:${s.cash >= h.price}:${this.placeType === h.id}`;
+      if (key !== this._heroKey) {
+        this._heroKey = key;
+        delete h.el.dataset.heroSelect;
+        h.el.dataset.type = h.id;
+        setHidden(h.priceEl, false);
+        setHidden(h.lvlEl, true);
+        setHidden(h.xpEl, true);
+        setHidden(h.keyEl, false);
+        setClass(h.el, 'is-deployed', false);
+        setClass(h.el, 'is-poor', s.cash < h.price);
+        setClass(h.el, 'is-active', this.placeType === h.id);
+        setAttr(h.el, 'aria-label', `Deploy ${h.def.name}, ${int(h.price)} credits, hotkey U`);
+      }
+    }
+  }
+
+  _updatePreview(sim) {
+    const s = sim.state;
+    this._previewWave = s.wave;
+    const w = s.wave + 1;
+    let list = [];
+    try { list = sim.wavePreview(w) || []; } catch (err) { console.error(err); list = []; }
+    let info = null;
+    try { info = typeof sim.waveInfo === 'function' ? sim.waveInfo(w) : null; } catch { info = null; }
+    setText(this.$previewWave, `Wave ${w}`);
+    setText(this.$previewName, info?.name ? clean(info.name) : '');
+    const titan = w % TITAN_EVERY === 0;
+    const tags = [];
+    if (titan) tags.push('<span class="tag tag--titan">Titan</span>');
+    if (list.some((g) => g.mods?.phantom)) tags.push('<span class="tag tag--phantom">Phantom</span>');
+    setHTML(this.$previewTags, tags.join(''));
+
+    // merge identical entries
+    const merged = new Map();
+    for (const g of list) {
+      const mods = g.mods || {};
+      const k = `${g.type}|${mods.phantom ? 1 : 0}${mods.nanite ? 1 : 0}${mods.plated ? 1 : 0}`;
+      const m = merged.get(k);
+      if (m) m.count += g.count || 0;
+      else merged.set(k, { type: g.type, count: g.count || 0, mods });
+    }
+    const items = [...merged.values()];
+    const ENEMIES = this.data.ENEMIES;
+    const frag = document.createDocumentFragment();
+    const mini = document.createDocumentFragment();
+    items.forEach((g, i) => {
+      const def = ENEMIES[g.type];
+      const name = def?.name || g.type;
+      const badges = [
+        g.mods.phantom ? '<i class="mod mod--phantom" title="Phantom: needs detection">P</i>' : '',
+        g.mods.nanite ? '<i class="mod mod--nanite" title="Nanite: regrows">N</i>' : '',
+        g.mods.plated ? '<i class="mod mod--plated" title="Plated: double shell">+</i>' : '',
+      ].join('');
+      const seen = this._seen || new Set();
+      const fresh = w > 1 && (!seen.has(g.type) || (g.mods.phantom && !seen.has('mod:phantom')) || (g.mods.nanite && !seen.has('mod:nanite')) || (g.mods.plated && !seen.has('mod:plated')));
+      const d = el('div', `pv${fresh ? ' pv--new' : ''}`);
+      d.title = `${g.count} ${name}${g.mods.phantom ? ', Phantom' : ''}${g.mods.nanite ? ', Nanite' : ''}${g.mods.plated ? ', Plated' : ''}${fresh ? '. New threat' : ''}`;
+      d.innerHTML = `<canvas></canvas><span class="pv__n">${short(g.count)}</span>${badges ? `<span class="pv__mods">${badges}</span>` : ''}${fresh ? '<span class="pv__new">New</span>' : ''}`;
+      this.game.icons.enemy(d.querySelector('canvas'), g.type, 30, g.mods);
+      frag.appendChild(d);
+      if (i < 5) {
+        const m = el('div', 'pv pv--mini');
+        m.innerHTML = `<canvas></canvas><span class="pv__n">${short(g.count)}</span>`;
+        this.game.icons.enemy(m.querySelector('canvas'), g.type, 22, g.mods);
+        mini.appendChild(m);
+      }
+    });
+    if (titan) {
+      const d = el('div', 'pv pv--titan');
+      d.title = 'Storm Titan';
+      d.innerHTML = `<span class="pv__skull">${icon('skull')}</span><span class="pv__n">Titan</span>`;
+      frag.appendChild(d);
+    }
+    if (!items.length && !titan) frag.appendChild(el('div', 'preview__empty', 'Scanning the storm'));
+    this.$previewList.replaceChildren(frag);
+    if (items.length > 5) mini.appendChild(el('span', 'pv-more', `+${items.length - 5}`));
+    this.$drawerPreview.replaceChildren(mini);
+  }
+
+  _updateAbilities(sim) {
+    let bar = [];
+    try { bar = sim.abilityBar() || []; } catch { bar = []; }
+    const key = bar.map((a) => a.id).join('|');
+    if (key !== this._abilityKey) {
+      this._abilityKey = key;
+      this._abilityEls.clear();
+      const frag = document.createDocumentFragment();
+      bar.forEach((a, i) => {
+        const b = el('button', 'ab');
+        b.type = 'button';
+        b.dataset.id = a.id;
+        b.innerHTML = `<canvas></canvas><span class="ab__sweep"></span><span class="ab__glyph"></span><span class="ab__cd"></span><kbd class="ab__key">${i < 9 ? i + 1 : ''}</kbd><span class="ab__count"></span><span class="ab__name"><b>${esc(clean(a.name || a.id))}</b>${a.desc ? `<span>${esc(clean(a.desc))}</span>` : ''}</span>`;
+        const tower = this._tower(a.towerIds?.[0]);
+        if (tower) {
+          const def = this._defOf(tower);
+          if (this._isHero(tower)) this.game.icons.hero(b.querySelector('canvas'), def, 40);
+          else this.game.icons.tower(b.querySelector('canvas'), def, 40, this._variant(tower));
+        }
+        const g = typeof a.icon === 'string' && a.icon.length <= 2 ? a.icon : '';
+        b.querySelector('.ab__glyph').textContent = g;
+        frag.appendChild(b);
+        this._abilityEls.set(a.id, { el: b, sweep: b.querySelector('.ab__sweep'), count: b.querySelector('.ab__count'), cd: b.querySelector('.ab__cd') });
+      });
+      this.$abilities.replaceChildren(frag);
+    }
+    for (let i = 0; i < bar.length; i++) {
+      const a = bar[i];
+      const r = this._abilityEls.get(a.id);
+      if (!r) continue;
+      const frac = a.ready ? 0 : Math.max(0, Math.min(1, Number(a.cdFrac) || 0));
+      setVar(r.el, '--cd', frac.toFixed(3));
+      const usable = !!a.ready && a.usable !== false;
+      setClass(r.el, 'is-ready', usable);
+      setClass(r.el, 'is-waiting', !!a.ready && !usable);
+      const n = a.towerIds?.length || 0;
+      setText(r.count, n > 1 ? `x${n}` : '');
+      setText(r.cd, a.ready || !(a.cd > 0) ? '' : String(Math.ceil(a.cd)));
+      setAttr(r.el, 'aria-label', `${clean(a.name || a.id)}${usable ? ', ready' : a.ready ? ', ready when the next wave starts' : ', cooling down'}${i < 9 ? `. Hotkey ${i + 1}` : ''}`);
+      setAttr(r.el, 'title', a.ready && !usable ? 'Ready. Use it during a wave.' : null);
+      setAttr(r.el, 'aria-disabled', usable ? null : 'true');
+    }
+  }
+
+  abilityAt(index) {
+    const sim = this.sim;
+    if (!sim) return null;
+    let bar = [];
+    try { bar = sim.abilityBar() || []; } catch { bar = []; }
+    return bar[index] || null;
+  }
+
+  _updateTitan(s) {
+    const t = s.titan;
+    setHidden(this.$titan, !t);
+    if (!t) return;
+    setText(this.$titanName, clean(t.name || 'Storm Titan'));
+    const hpFrac = t.maxHp > 0 ? Math.max(0, t.hp / t.maxHp) : 0;
+    setVar(this.$titanHp, '--fill', hpFrac.toFixed(4));
+    const sh = t.maxShield > 0 ? Math.max(0, (t.shield || 0) / t.maxShield) : 0;
+    setVar(this.$titanShield, '--fill', sh.toFixed(4));
+    setHidden(this.$titanShield, !(t.maxShield > 0));
+    setText(this.$titanNum, `${short(Math.max(0, t.hp))} / ${short(t.maxHp)}${t.maxShield > 0 && t.shield > 0 ? `  +${short(t.shield)} shield` : ''}`);
+  }
+
+  _updateGhostTag() {
+    const p = this.state.placing;
+    if (!p || !this.game.renderer) { setHidden(this.$ghostTag, true); return; }
+    const pt = this.game.worldToScreen(p.x, p.y);
+    if (!pt) { setHidden(this.$ghostTag, true); return; }
+    setHidden(this.$ghostTag, false);
+    const def = this.data.TOWERS[p.type] || this.data.HEROES[p.type];
+    const r = (def?.radius || 22) * (this.game.worldScale() || 1);
+    this.$ghostTag.style.transform = `translate(${Math.round(pt.x)}px, ${Math.round(pt.y + r + 10)}px) translate(-50%, 0)`;
+    setHTML(this.$ghostPrice, credits(p.price));
+    setText(this.$ghostWhy, p.valid ? '' : friendlyReason(p.reason));
+    setClass(this.$ghostTag, 'is-bad', !p.valid);
+  }
+
+  setFps(text) {
+    setHidden(this.$fps, !text);
+    if (text) setHTML(this.$fps, text);
+  }
+
+  // ======================================================================= banners, toasts, tips
+
+  banner(title, sub = '', kind = 'wave') {
+    const reduce = this.game.reducedMotion;
+    for (const old of [...this.$banners.children]) {
+      old.classList.add('out');
+      setTimeout(() => old.remove(), 260);
+    }
+    const b = el('div', `banner banner--${kind}${reduce ? ' banner--still' : ''}`);
+    b.innerHTML = `<div class="banner__title">${esc(title)}</div>${sub ? `<div class="banner__sub">${kind === 'clear' ? glyph() : ''}${esc(sub)}</div>` : ''}`;
+    this.$banners.appendChild(b);
+    const life = kind === 'titan' ? 3200 : kind === 'win' ? 2600 : 1900;
+    setTimeout(() => { b.classList.add('out'); setTimeout(() => b.remove(), 300); }, life);
+  }
+
+  toast(msg, kind = 'info', ms = 2400) {
+    const text = String(msg);
+    for (const t of this.$toasts.children) {
+      if (t._msg === text) {
+        t._n = (t._n || 1) + 1;
+        t.querySelector('.toast__n').textContent = `x${t._n}`;
+        clearTimeout(t._timer);
+        t._timer = setTimeout(() => this._dropToast(t), ms);
+        t.classList.remove('bump'); void t.offsetWidth; t.classList.add('bump');
+        return;
+      }
+    }
+    const t = el('div', `toast toast--${kind}`);
+    t._msg = text;
+    t.innerHTML = `<span class="toast__msg">${esc(text)}</span><span class="toast__n"></span>`;
+    this.$toasts.appendChild(t);
+    while (this.$toasts.children.length > 3) this.$toasts.firstElementChild.remove();
+    t._timer = setTimeout(() => this._dropToast(t), ms);
+  }
+
+  _dropToast(t) {
+    t.classList.add('out');
+    setTimeout(() => t.remove(), 250);
+  }
+
+  _showTip(tile) {
+    const type = tile.dataset.type;
+    const def = this.data.TOWERS[type] || this.data.HEROES[type];
+    if (!def) return;
+    if (this._tipFor !== type) this.game.uiHover();
+    this._tipFor = type;
+    const price = this.prices[type] ?? 0;
+    const dt = primaryDtype(def.base);
+    const range = def.base?.range;
+    const det = def.base?.detection;
+    const key = type === this._heroId() ? 'U' : (def.hotkey || '').toUpperCase();
+    const facts = [];
+    if (dt) facts.push(`<span class="chip chip--dtype" style="--chip:var(--dt-${dt.toLowerCase()}, #9fb0cf)">${esc(dtypeLabel(dt))}</span>`);
+    if (Number.isFinite(range)) facts.push(`<span class="tip__fact">Range ${range >= 5000 ? 'global' : int(range)}</span>`);
+    if (det) facts.push('<span class="tip__fact tip__fact--det">Detection</span>');
+    this.$tip.innerHTML = `
+      <div class="tip__head"><span class="tip__name">${esc(def.name)}</span>${key ? `<kbd>${esc(key)}</kbd>` : ''}</div>
+      <p class="tip__blurb">${esc(clean(def.blurb || def.desc || def.role || ''))}</p>
+      <div class="tip__facts">${facts.join('')}</div>
+      <div class="tip__price">${credits(price)}</div>`;
+    this.$tip.hidden = false;
+    const r = tile.getBoundingClientRect();
+    const tw = this.$tip.offsetWidth, th = this.$tip.offsetHeight;
+    let x, y;
+    if (this.game.layout === 'compact') {
+      x = Math.min(window.innerWidth - tw - 8, Math.max(8, r.left + r.width / 2 - tw / 2));
+      y = r.top - th - 8;
+    } else {
+      const pr = this.panel.getBoundingClientRect();
+      const top = this.hud.getBoundingClientRect().bottom + 8;
+      x = pr.left - tw - 10;
+      y = Math.min(window.innerHeight - th - 8, Math.max(top, r.top + r.height / 2 - th / 2));
+    }
+    this.$tip.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
+  }
+
+  _hideTip() {
+    this._tipFor = null;
+    if (this.$tip) this.$tip.hidden = true;
+  }
+}
