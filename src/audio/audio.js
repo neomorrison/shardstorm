@@ -23,6 +23,15 @@ const BURST_THRESHOLD = 6;
 
 function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
 function clamp01(v) { return clamp(v, 0, 1); }
+
+// Safari 16.4+ Audio Session API: 'playback' lets game audio play when an iPhone or iPad is on
+// silent or in a Focus mode (the default 'auto'/'ambient' session is muted there). No-op elsewhere.
+function requestPlaybackSession() {
+  try {
+    const s = typeof navigator !== 'undefined' ? navigator.audioSession : null;
+    if (s && s.type !== 'playback') s.type = 'playback';
+  } catch { /* ignore */ }
+}
 function lerp(a, b, t) { return a + (b - a) * t; }
 
 // Aggregate gain for a representative sound standing in for `count` individual events.
@@ -98,6 +107,7 @@ export class Audio {
     this._noiseBuffer = null;
 
     if (this.available) {
+      requestPlaybackSession();
       try {
         const Ctor = window.AudioContext || window.webkitAudioContext;
         this.ctx = new Ctor();
@@ -134,13 +144,28 @@ export class Audio {
   get ready() { return !!(this.ctx && this.ctx.state === 'running'); }
 
   // Resume the AudioContext on a user gesture. Safe to call repeatedly, before the context
-  // exists, or when WebAudio is unavailable.
+  // exists, or when WebAudio is unavailable. Returns true once audio is actually running.
+  //
+  // iOS/iPadOS Safari needs three things: the resume must happen inside a touchend/click/keydown
+  // handler (touchstart and pointerdown do not count), a sound has to start inside that same
+  // gesture, and the audio session must ask for playback, or the silent switch and Focus modes
+  // mute Web Audio completely. The context can also drop to 'interrupted' after an app switch,
+  // so callers keep calling this on every gesture until it reports running.
   unlock() {
-    if (!this.ctx) return;
+    if (!this.ctx) return false;
     try {
       this.unlocked = true;
-      if (this.ctx.state === 'suspended') this.ctx.resume().catch(() => {});
+      requestPlaybackSession();
+      if (this.ctx.state !== 'running') {
+        this.ctx.resume().catch(() => {});
+        const src = this.ctx.createBufferSource();
+        src.buffer = this.ctx.createBuffer(1, 1, this.ctx.sampleRate);
+        src.connect(this.ctx.destination);
+        src.onended = () => { try { src.disconnect(); } catch { /* ignore */ } };
+        src.start(0);
+      }
     } catch { /* ignore */ }
+    return this.ready;
   }
 
   setVolumes({ sfx, music } = {}) {

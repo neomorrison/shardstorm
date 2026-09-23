@@ -63,7 +63,14 @@ html, body {
   -webkit-tap-highlight-color: transparent;
   user-select: none;
   -webkit-user-select: none;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  -webkit-touch-callout: none;
+  /* No browser double-tap or pinch zoom anywhere (iPad Safari ignores user-scalable=no).
+     The playfield canvas (.view) sets touch-action: none and handles its own pinch zoom. */
+  touch-action: manipulation;
 }
+button, a, input, select, label, [role="button"] { touch-action: manipulation; }
 body { background: radial-gradient(120% 90% at 50% 0%, #0f1733 0%, var(--bg) 60%); }
 
 button { font: inherit; color: inherit; cursor: pointer; border: 0; background: none; padding: 0; }

@@ -200,6 +200,7 @@ class Game {
   // ------------------------------------------------------------------ boot
 
   async boot() {
+    this._lockPageZoom();
     const bootEl = document.getElementById('boot');
     const bar = bootEl?.querySelector('.boot__bar i');
     const setProgress = (f) => { if (bar) bar.style.transform = `scaleX(${Math.max(0.05, Math.min(1, f))})`; };
@@ -422,23 +423,41 @@ class Game {
     window.addEventListener('pagehide', () => { this.saveNow(); this.flushTotals(); });
   }
 
+  // iPad and iPhone Safari ignore user-scalable=no, so a stray double tap or pinch on the HUD
+  // zoomed the whole page with no easy way back. CSS touch-action handles double tap; these
+  // listeners stop Safari's pinch gestures. The playfield keeps its own zoom (src/ui/input.js),
+  // which runs on pointer events and is unaffected.
+  _lockPageZoom() {
+    const block = (e) => { if (e.cancelable) e.preventDefault(); };
+    for (const type of ['gesturestart', 'gesturechange', 'gestureend']) {
+      document.addEventListener(type, block, { passive: false });
+    }
+    document.addEventListener('touchmove', (e) => { if (e.touches && e.touches.length > 1) block(e); }, { passive: false });
+    document.addEventListener('dblclick', block, { passive: false });
+  }
+
   _globalUiSounds() {
     document.addEventListener('click', (e) => {
       const b = e.target.closest?.('#hud button, #panel button, #overlay button');
       if (b && b.getAttribute('aria-disabled') !== 'true' && !b.disabled) this.uiClick();
     });
+    // iOS Safari only starts audio from touchend, click or keydown (never pointerdown or
+    // touchstart), and can suspend it again after an app switch, so every gesture retries
+    // until the context is running. Once running, unlock() is a cheap state check.
     const unlock = () => this.unlockAudio();
-    window.addEventListener('pointerdown', unlock, { passive: true });
-    window.addEventListener('keydown', unlock);
+    for (const type of ['pointerdown', 'pointerup', 'touchend', 'click', 'keydown']) {
+      window.addEventListener(type, unlock, { capture: true, passive: true });
+    }
   }
 
   unlockAudio() {
-    if (this._audioUnlocked) return;
-    this._audioUnlocked = true;
     try {
       this.audio.unlock();
-      this.audio.setVolumes({ sfx: this.settings.sfx, music: this.settings.music });
-      this.audio.startMusic();
+      if (!this._audioUnlocked) {
+        this._audioUnlocked = true;
+        this.audio.setVolumes({ sfx: this.settings.sfx, music: this.settings.music });
+        this.audio.startMusic();
+      }
     } catch { /* ignore */ }
   }
 
