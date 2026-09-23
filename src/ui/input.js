@@ -334,8 +334,11 @@ export class Input {
 
     // menus own the keyboard while open
     if (g.screens.isOpen) {
-      if (e.key === 'Escape') { e.preventDefault(); g.screens.back(); }
-      else if ((e.key === 'p' || e.key === 'P') && g.screens.current === 'pause' && !typing) { e.preventDefault(); g.resume(); }
+      const sc = g.screens;
+      if (e.key === 'Tab') sc.kbdNav = true;
+      if (e.key === 'Escape') { e.preventDefault(); sc.back(); }
+      else if ((e.key === 'p' || e.key === 'P') && sc.current === 'pause' && !typing) { e.preventDefault(); g.resume(); }
+      else if (this._strayActivation(e)) { e.preventDefault(); this._eatSpaceUp = e.key === ' '; }
       return;
     }
     if (!g.sim || !g.inGame || typing) return;
@@ -418,7 +421,24 @@ export class Input {
     }
   }
 
+  /**
+   * Space is the wave key and gets pressed constantly, so on the in-game modals (pause, game
+   * over) it must not press the focused Resume or Retry button: Space only activates a button
+   * the player reached with Tab. Enter works, but not in the first moments after the game over
+   * screen appears, when a key meant for the game could still land on Retry.
+   */
+  _strayActivation(e) {
+    const g = this.game;
+    const sc = g.screens;
+    if (!g.inGame || (sc.current !== 'pause' && sc.current !== 'gameover')) return false;
+    if (e.target?.tagName !== 'BUTTON' && e.target !== document.body && !e.target?.classList?.contains('screen')) return false;
+    if (e.key === ' ' || e.key === 'Spacebar') return !sc.kbdNav;
+    if (e.key === 'Enter') return sc.current === 'gameover' && performance.now() - sc.openedAt < 700;
+    return false;
+  }
+
   onKeyUp(e) {
+    if (this._eatSpaceUp && e.key === ' ') { this._eatSpaceUp = false; e.preventDefault(); }
     if (e.key === 'Shift') {
       this.shift = false;
       if (this.ui) this.ui.state.showAllRanges = false;

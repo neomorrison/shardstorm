@@ -59,7 +59,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   lastDifficulty: 'pilot',
   lastHero: null,
   drawer: true,        // compact layout: drawer expanded
-  codexDifficulty: 'pilot',
+  codexDifficulty: null, // Codex "Prices at" outside a run (a run always shows its own difficulty)
   coach: true,         // first-run hints
 });
 
@@ -160,6 +160,17 @@ export function resetRecords() {
 export function saveRun(data, meta = {}) {
   if (!data) return false;
   return write('run', { v: 1, savedAt: Date.now(), meta, data });
+}
+
+/**
+ * Merges fields into the saved run's meta without touching its data (run time and lifetime
+ * bookkeeping that moves on while the save itself cannot, e.g. mid-wave). No save, no-op.
+ */
+export function patchRunMeta(patch = {}) {
+  const r = read('run', null);
+  if (!r || typeof r !== 'object' || !r.data) return false;
+  r.meta = { ...(r.meta || {}), ...patch };
+  return write('run', r);
 }
 
 /** Returns { meta, data, savedAt } or null. */

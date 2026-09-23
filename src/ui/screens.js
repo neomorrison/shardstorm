@@ -14,7 +14,7 @@ import { PATH_COLORS } from './ui.js';
 const DIFF_ORDER = ['cadet', 'pilot', 'veteran', 'nightmare'];
 const DIFF_BLURB = {
   cadet: 'Cheaper towers and a sturdy Core. A good first storm.',
-  pilot: 'The standard storm. Balanced costs and armor.',
+  pilot: 'The standard storm. Standard costs and a solid Core.',
   veteran: 'Pricier towers and a thinner Core.',
   nightmare: 'A single leak ends the run. Towers cost the most.',
 };
@@ -34,13 +34,13 @@ function laneText(m) {
 }
 const FIRST_SEEN = UNLOCK;   // first wave each enemy appears in (src/data/waves.js)
 const TITANS = [
-  { kind: 'maw', name: 'Maw', waves: 'Waves 20, 80, 140', desc: 'Spits meteors behind itself as it advances. The grade of what it spits rises every appearance.' },
+  { kind: 'maw', name: 'Maw', waves: 'Waves 20, 80, 140', desc: 'Spits meteors behind itself as it advances. The grade of what it spits rises every appearance. Slowing it buys time, not credits: it pays for the volleys of one crossing.' },
   { kind: 'aegis', name: 'Aegis', waves: 'Waves 40, 100, 160', desc: 'Carries a regenerating shield worth a quarter of its hull. Kinetic hits deal only a fifth of their damage to it, and it restores after 8 s without being hit.' },
   { kind: 'rift', name: 'Rift', waves: 'Waves 60, 120, 180', desc: 'At 75, 50 and 25% hull it blinks forward along the channel and stuns towers within 150 units for 1.5 s.' },
 ];
 const MODIFIERS = [
   { key: 'phantom', name: 'Phantom', desc: 'Only towers with detection can target it. Area damage still hits it. Children stay Phantom.' },
-  { key: 'nanite', name: 'Nanite', desc: 'Regrows one grade after 3 s without damage, up to its original type. Children inherit it.' },
+  { key: 'nanite', name: 'Nanite', desc: 'Regrows one grade after 3 s without damage, up to its original type. Children inherit it. Regrown layers pay no extra credits.' },
   { key: 'plated', name: 'Plated', desc: 'Double shell HP on the outer layer. Children are not plated.' },
 ];
 
@@ -457,6 +457,9 @@ export class Screens {
     this.currentEl = null;
     this.codexTab = 'enemies';
     this.codexTower = null;
+    this.codexDiff = null;      // "Prices at" picked in the open Codex (both tabs share it)
+    this.openedAt = 0;          // when the current screen appeared (guards stray key presses)
+    this.kbdNav = false;        // the player moved focus with Tab since then
     this.root.addEventListener('click', (e) => {
       const b = e.target.closest('button');
       if (b && !b.disabled && b.getAttribute('aria-disabled') !== 'true') this.game.uiClick();
@@ -535,6 +538,8 @@ export class Screens {
     if (old) this._dismiss(old, instant);
     if (instant || this.game.reducedMotion) node.classList.add('in');
     else requestAnimationFrame(() => requestAnimationFrame(() => node.classList.add('in')));
+    this.openedAt = performance.now();
+    this.kbdNav = false;
     // focus the first primary action for keyboard players
     node.tabIndex = -1;
     const f = node.querySelector('[data-autofocus]') || node.querySelector('.btn--primary') || node;
@@ -659,10 +664,10 @@ export class Screens {
       if (g.settings.lastMap === id) b.setAttribute('data-autofocus', '');
       b.setAttribute('aria-label', `${m.name}, ${m.difficulty}`);
       b.innerHTML = `
-        <span class="map-card__art"><canvas></canvas><span class="tag tag--${tagColor} map-card__tag">${esc(m.difficulty || '')}</span></span>
+        <span class="map-card__art"><canvas></canvas></span>
         <span class="map-card__body">
           <span class="map-card__name">${esc(m.name)}</span>
-          <span class="map-card__meta">${esc(laneText(m))}</span>
+          <span class="map-card__meta"><span class="tag tag--${tagColor}">${esc(m.difficulty || '')}</span>${esc(laneText(m))}</span>
           <span class="map-card__best"><span class="map-card__best-l">Best</span>${best}</span>
         </span>`;
       grid.appendChild(b);
@@ -707,10 +712,10 @@ export class Screens {
     }).join('');
     body.innerHTML = `
       <aside class="map-strip">
-        <span class="map-strip__art"><canvas></canvas><span class="tag tag--${MAP_TAG[map.difficulty] || 'teal'} map-card__tag">${esc(map.difficulty || '')}</span></span>
+        <span class="map-strip__art"><canvas></canvas></span>
         <div class="map-strip__body">
           <h2 class="map-strip__name">${esc(map.name)}</h2>
-          <span class="map-card__meta">${esc(laneText(map))}</span>
+          <span class="map-card__meta"><span class="tag tag--${MAP_TAG[map.difficulty] || 'teal'}">${esc(map.difficulty || '')}</span>${esc(laneText(map))}</span>
           <p class="map-strip__desc">${esc(MAP_BLURB[map.id] || '')}</p>
           <span class="map-card__best"><span class="map-card__best-l">Best</span>${bestChips}</span>
           <button type="button" class="btn btn--ghost btn--sm map-strip__change" data-act="maps">${icon('map')}<span>Change map</span></button>
@@ -755,12 +760,15 @@ export class Screens {
           }).join('')}
         </div>
       </div>` : ''}
-      <div class="setup__foot">
-        <p class="setup__note">${storage.hasRun() ? `${icon('info')} Starting a new run replaces your saved run.` : ''}</p>
-        <button type="button" class="btn btn--primary btn--xl setup__start" data-act="start" data-autofocus>${icon('play')}<span>Start run</span></button>
-      </div>
       </div>`;
     node.appendChild(body);
+    // The footer is a direct child of the scrolling screen, so it can stick to the bottom from
+    // the first frame: Start run is always on screen, however tall the setup gets.
+    const foot = el('div', 'setup__foot');
+    foot.innerHTML = `
+      <p class="setup__note">${storage.hasRun() ? `${icon('info')} Starting a new run replaces your saved run.` : ''}</p>
+      <button type="button" class="btn btn--primary btn--xl setup__start" data-act="start" data-autofocus>${icon('play')}<span>Start run</span></button>`;
+    node.appendChild(foot);
     requestAnimationFrame(() => {
       const art = body.querySelector('.map-strip__art');
       const w = Math.max(200, Math.round(art.clientWidth || 360));
@@ -779,8 +787,8 @@ export class Screens {
       }
     };
     sync();
-    body.addEventListener('click', (e) => {
-      const b = e.target.closest('button');
+    node.addEventListener('click', (e) => {
+      const b = e.target.closest('.setup button, .setup__foot button');
       if (!b) return;
       if (b.dataset.diff) { diff = b.dataset.diff; g.updateSettings({ lastDifficulty: diff }); sync(); }
       else if (b.dataset.hero !== undefined) { hero = b.dataset.hero || null; g.updateSettings({ lastHero: hero }); sync(); }
@@ -796,6 +804,17 @@ export class Screens {
     const s = g.sim?.state;
     const map = g.data.MAPS[s?.mapId];
     const diff = g.data.DIFFICULTIES[s?.difficulty];
+    // The sim can only save between waves. Mid-wave (and through a chain of waves sent early)
+    // the save stays at the last clear field, so say what Quit really keeps.
+    const lost = g.unsavedWaves();
+    const resumeAt = (g.run?.lastSaveCleared || 0) + 1;
+    let note;
+    if (!storage.persistent()) note = 'Saving is unavailable in this browser.';
+    else if (s && s.phase !== 'build') {
+      note = lost > 0
+        ? `Your run saves when the field is clear between waves. Quit now and it resumes at wave ${resumeAt}, so the last ${lost === 1 ? 'cleared wave' : `${lost} cleared waves`} would be played again.`
+        : `Your run saves when the field is clear between waves. Quit now and it resumes at the start of wave ${resumeAt}.`;
+    } else note = 'Your run saves when the field is clear between waves.';
     node.innerHTML = `
       <div class="modal modal--pause">
         <h1 class="modal__title">Paused</h1>
@@ -807,9 +826,10 @@ export class Screens {
           <button type="button" class="btn btn--glass btn--lg" data-act="codex">${icon('book')}<span>Codex</span></button>
           <button type="button" class="btn btn--glass btn--lg btn--quiet" data-act="quit">${icon('home')}<span>Quit to title</span></button>
         </nav>
-        <p class="modal__note">${storage.persistent() ? 'Your run saves after every cleared wave.' : 'Saving is unavailable in this browser.'}</p>
+        <p class="modal__note">${esc(note)}</p>
       </div>`;
     let armed = false;
+    let quitArmed = false;
     node.addEventListener('click', (e) => {
       const b = e.target.closest('button[data-act]');
       if (!b) return;
@@ -817,8 +837,15 @@ export class Screens {
       if (a === 'resume') g.resume();
       else if (a === 'settings') this.show('settings');
       else if (a === 'codex') this.show('codex');
-      else if (a === 'quit') g.quitToTitle();
-      else if (a === 'restart') {
+      else if (a === 'quit') {
+        // cleared waves would be replayed: ask once more
+        if (g.unsavedWaves() > 0 && !quitArmed) {
+          quitArmed = true;
+          b.classList.add('is-armed');
+          b.querySelector('span').textContent = `Quit, resume at wave ${resumeAt}`;
+          setTimeout(() => { if (b.isConnected) { quitArmed = false; b.classList.remove('is-armed'); b.querySelector('span').textContent = 'Quit to title'; } }, 3500);
+        } else g.quitToTitle();
+      } else if (a === 'restart') {
         if (!armed) {
           armed = true;
           b.classList.add('is-armed');
@@ -847,6 +874,13 @@ export class Screens {
         <div class="range"><input type="range" id="rng-${key}" min="0" max="100" step="1" value="${Math.round(s[key] * 100)}" data-key="${key}" style="--v:${Math.round(s[key] * 100)}%"><output class="range__out" for="rng-${key}">${pctText(s[key])}</output></div>
       </div>`;
     const keys = g.controls();
+    const one = (k) => {
+      if (Array.isArray(k)) return k.map((x) => `<kbd>${esc(x)}</kbd>`).join('<span class="keys__plus" aria-label="plus">+</span>');
+      if (k && k.from) return `<kbd>${esc(k.from)}</kbd><span class="keys__sep">to</span><kbd>${esc(k.to)}</kbd>`;
+      if (k && k.list) return k.list.map((x) => `<kbd>${esc(x)}</kbd>`).join('');
+      return `<kbd>${esc(k)}</kbd>`;
+    };
+    const keyCell = (row) => row.keys.map(one).join('<span class="keys__sep">or</span>');
     const body = el('div', 'settings');
     body.innerHTML = `
       <section class="set-group">
@@ -871,8 +905,8 @@ export class Screens {
         ${toggle('showFps', 'Show FPS', '')}
       </section>
       <section class="set-group set-group--keys">
-        <h2 class="section-title">${icon('grid')} Controls</h2>
-        <dl class="keys">${keys.map(([k, v]) => `<div class="keys__row"><dt>${k.map((x) => `<kbd>${esc(x)}</kbd>`).join(' ')}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>
+        <h2 class="section-title">${icon('grid')} ${g.isTouch ? 'Touch controls' : 'Controls'}</h2>
+        <dl class="keys">${keys.map((row) => `<div class="keys__row"><dt>${keyCell(row)}</dt><dd>${esc(row.label)}</dd></div>`).join('')}</dl>
       </section>
       <div class="settings__foot"><button type="button" class="btn btn--primary btn--lg" data-act="done" data-autofocus>${icon('check')}<span>Done</span></button></div>`;
     node.appendChild(body);
@@ -914,8 +948,9 @@ export class Screens {
     const map = g.data.MAPS[p.mapId];
     const diff = g.data.DIFFICULTIES[p.difficulty];
     const st = p.stats || {};
+    // Headline: the score, waves fully cleared (what records keep). The fatal wave is a stat.
     const rows = [
-      ['Waves cleared', int(p.cleared || 0)],
+      ['Fell on wave', int(p.wave || 0)],
       ['Shells shattered', short(st.pops || 0)],
       ['Damage dealt', short(st.damage || 0)],
       ['Credits earned', short(st.cashEarned || 0)],
@@ -925,7 +960,7 @@ export class Screens {
     node.innerHTML = `
       <div class="modal modal--over ${p.newBest ? 'is-record' : ''}">
         <p class="over__kicker">Core lost</p>
-        <h1 class="over__wave"><span class="over__wave-l">Wave</span><span class="over__wave-n">${int(p.wave || 0)}</span></h1>
+        <h1 class="over__wave"><span class="over__wave-l">Waves cleared</span><span class="over__wave-n">${int(p.cleared || 0)}</span></h1>
         ${p.newBest ? `<div class="record-banner">${icon('star')}<span>New record</span>${icon('star')}</div>` : ''}
         <p class="over__best">${esc([map?.name, diff?.name].filter(Boolean).join(' · '))} <span class="dot"></span> Best ${int(p.best || 0)}</p>
         <dl class="over__stats">${rows.map(([k, v]) => `<div class="over__stat"><dt>${esc(k)}</dt><dd>${esc(v)}</dd></div>`).join('')}</dl>
@@ -982,6 +1017,11 @@ export class Screens {
     const g = this.game;
     const heroes = (g.data.HERO_ORDER || []).filter((id) => g.data.HEROES[id]);
     this._header(node, 'Codex', 'Know the storm. Know your arsenal.');
+    // Prices follow the run in progress; outside a run, the last "Prices at" pick.
+    const D = g.data.DIFFICULTIES;
+    this.codexDiff = g.sim?.state?.difficulty && D[g.sim.state.difficulty] ? g.sim.state.difficulty
+      : D[g.settings.codexDifficulty] ? g.settings.codexDifficulty
+        : D[g.settings.lastDifficulty] ? g.settings.lastDifficulty : 'pilot';
     const tabs = [['enemies', 'Meteors and ships'], ['towers', 'Towers'], ['types', 'Damage types']];
     if (heroes.length) tabs.push(['heroes', 'Commanders']);
     if (!tabs.some(([k]) => k === this.codexTab)) this.codexTab = 'enemies';
@@ -1022,14 +1062,15 @@ export class Screens {
   _enemyCard(id, def) {
     const g = this.game;
     const ship = def.kind === 'ship';
-    const kids = (def.children || []).map(([c, n]) => `${n} ${g.data.ENEMIES[c]?.name || c}`).join(', ');
+    const plural = (name, n) => (n > 1 && !/s$/i.test(name) ? name + 's' : name);
+    const kids = (def.children || []).map(([c, n]) => `${n} ${plural(g.data.ENEMIES[c]?.name || c, n)}`).join(', ');
     const imm = def.immune || [];
     const card = el('article', `ecard ${ship ? 'ecard--ship' : ''}`);
     const notes = [];
     if (def.phantom) notes.push('Phantom: needs detection.');
     if (def.childMods?.phantom || def.childMods?.nanite) notes.push(`Releases ${[def.childMods.phantom ? 'Phantom' : '', def.childMods.nanite ? 'Nanite' : ''].filter(Boolean).join(' ')} meteors.`);
     if (ship) notes.push('Cannot be frozen. Overflow damage stops at the hull.');
-    if (id === 'comet') notes.push('Ignores Cryo slows.');
+    else if (imm.some((t) => String(t).toUpperCase() === 'CRYO')) notes.push('Cryo cannot freeze or slow it.');
     card.innerHTML = `
       <div class="ecard__art"><canvas></canvas></div>
       <div class="ecard__body">
@@ -1088,7 +1129,6 @@ export class Screens {
     const ids = TOWER_ORDER.filter((id) => TOWERS[id]);
     if (!ids.length) { panel.appendChild(el('p', 'empty', 'The arsenal is still being assembled.')); return; }
     if (!ids.includes(this.codexTower)) this.codexTower = ids[0];
-    let diff = DIFFICULTIES[g.settings.codexDifficulty] ? g.settings.codexDifficulty : (g.sim?.state?.difficulty || 'pilot');
     const wrap = el('div', 'ctow');
     const list = el('div', 'ctow__list');
     list.setAttribute('role', 'listbox');
@@ -1106,6 +1146,7 @@ export class Screens {
     wrap.append(list, detail);
     panel.appendChild(wrap);
     const draw = () => {
+      const diff = this.codexDiff;
       for (const b of list.querySelectorAll('.ctow__item')) b.setAttribute('aria-selected', String(b.dataset.tower === this.codexTower));
       const def = TOWERS[this.codexTower];
       const atks = Object.values(def.base?.attacks || {}).filter((a) => a && a.needsTarget !== false && !(a.kind === 'field' && !(a.dps > 0)));
@@ -1115,12 +1156,12 @@ export class Screens {
       const isRig = /rig/i.test(def.id || this.codexTower);
       const facts = [
         `<span class="fact"><span class="fact__k">Cost</span><span class="fact__v">${credits(priceFor(def.cost || 0, diff))}</span></span>`,
-        def.hotkey ? `<span class="fact"><span class="fact__k">Hotkey</span><span class="fact__v"><kbd>${esc(def.hotkey.toUpperCase())}</kbd></span></span>` : '',
+        def.hotkey && !g.isTouch ? `<span class="fact"><span class="fact__k">Hotkey</span><span class="fact__v"><kbd>${esc(def.hotkey.toUpperCase())}</kbd></span></span>` : '',
         range === Infinity || Number.isFinite(range) ? `<span class="fact"><span class="fact__k">Range</span><span class="fact__v">${range >= 5000 ? 'Global' : int(range)}</span></span>` : '',
         Number.isFinite(aura) && aura > 0 ? `<span class="fact"><span class="fact__k">Aura</span><span class="fact__v">${int(aura)}</span></span>` : '',
         `<span class="fact"><span class="fact__k">Damage</span><span class="fact__v">${dts.length ? dts.map((t) => dtypeChip(t)).join('') : '<span class="muted">None</span>'}</span></span>`,
         `<span class="fact"><span class="fact__k">Detection</span><span class="fact__v">${def.base?.detection ? 'Yes' : 'No'}</span></span>`,
-        isRig ? `<span class="fact"><span class="fact__k">Limit</span><span class="fact__v">${RIG_CAP} per run</span></span>` : '',
+        isRig ? `<span class="fact"><span class="fact__k">Limit</span><span class="fact__v">${RIG_CAP} at once</span></span>` : '',
       ].join('');
       const paths = (def.paths || []).slice(0, 3);
       detail.innerHTML = `
@@ -1129,11 +1170,7 @@ export class Screens {
           <div class="ctow__id"><h2 class="ctow__name">${esc(def.name)}</h2><p class="ctow__blurb">${esc(clean(def.blurb || ''))}</p></div>
         </header>
         <div class="facts">${facts}</div>
-        <div class="ctow__diff"><span class="ctow__diff-l">Prices at</span>
-          <div class="seg seg--sm" role="radiogroup" aria-label="Difficulty for prices">
-            ${DIFF_ORDER.filter((d) => DIFFICULTIES[d]).map((d) => `<button type="button" class="seg__btn ${d === diff ? 'is-on' : ''}" role="radio" aria-checked="${d === diff}" data-cdiff="${d}">${esc(DIFFICULTIES[d].name)}</button>`).join('')}
-          </div>
-        </div>
+        ${this._diffPicker(diff)}
         <div class="cpaths">
           ${paths.map((p, i) => {
             let total = 0;
@@ -1161,11 +1198,27 @@ export class Screens {
     detail.addEventListener('click', (e) => {
       const b = e.target.closest('[data-cdiff]');
       if (!b) return;
-      diff = b.dataset.cdiff;
-      g.updateSettings({ codexDifficulty: diff });
+      this._pickCodexDiff(b.dataset.cdiff);
       draw();
     });
     draw();
+  }
+
+  /** The Codex "Prices at" selector, shared by the Towers and Commanders tabs. */
+  _diffPicker(diff) {
+    const { DIFFICULTIES } = this.game.data;
+    const inRun = this.game.sim?.state?.difficulty === diff;
+    return `<div class="ctow__diff"><span class="ctow__diff-l">Prices at</span>
+      <div class="seg seg--sm" role="radiogroup" aria-label="Difficulty for prices">
+        ${DIFF_ORDER.filter((d) => DIFFICULTIES[d]).map((d) => `<button type="button" class="seg__btn ${d === diff ? 'is-on' : ''}" role="radio" aria-checked="${d === diff}" data-cdiff="${d}">${esc(DIFFICULTIES[d].name)}</button>`).join('')}
+      </div>${inRun ? '<span class="ctow__diff-note">This run</span>' : ''}
+    </div>`;
+  }
+
+  _pickCodexDiff(d) {
+    if (!this.game.data.DIFFICULTIES[d]) return;
+    this.codexDiff = d;
+    if (!this.game.sim) this.game.updateSettings({ codexDifficulty: d });
   }
 
   _codexTypes(panel) {
@@ -1187,7 +1240,17 @@ export class Screens {
   _codexHeroes(panel) {
     const g = this.game;
     const { HEROES, HERO_ORDER } = g.data;
-    const diff = g.sim?.state?.difficulty || g.settings.lastDifficulty || 'pilot';
+    const diff = this.codexDiff || 'pilot';
+    const pick = el('div', 'codex__diff');
+    pick.innerHTML = this._diffPicker(diff);
+    pick.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-cdiff]');
+      if (!b) return;
+      this._pickCodexDiff(b.dataset.cdiff);
+      panel.innerHTML = '';
+      this._codexHeroes(panel);
+    });
+    panel.appendChild(pick);
     const wrap = el('div', 'hcards');
     for (const id of HERO_ORDER.filter((x) => HEROES[x])) {
       const H = HEROES[id];

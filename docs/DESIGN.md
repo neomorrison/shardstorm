@@ -16,8 +16,8 @@ Currency: **credits** (shown as a number with a small crystal glyph, e.g. `◆ 6
 
 1. Build phase: place towers, upgrade, sell. Press **Launch Wave** (or auto-start).
 2. Wave phase: meteors spawn at the channel mouth and follow the path to the Core. Towers fire automatically. Each shell destroyed pays credits. Any meteor that reaches the Core deals its remaining **mass** as damage to Core Integrity.
-3. Wave cleared: wave bonus paid, Mining Rigs pay out, autosave, next wave.
-4. You can place, upgrade and sell during waves too. You can **send the next wave early** once the current wave has finished spawning (Bloons-style), which overlaps waves.
+3. Wave cleared: wave bonus paid, Mining Rigs pay out, next wave. The run autosaves whenever the field is clear again (see section 10).
+4. You can place, upgrade and sell during waves too. You can **send the next wave early** once the current wave has finished spawning (Bloons-style), which overlaps waves. Auto-start (a setting and a HUD toggle) launches the next wave shortly after one is cleared; it never launches the first wave of a run on its own.
 
 Game over when Core Integrity hits 0. The run's score is the highest wave fully cleared. Records are kept per map and difficulty.
 
@@ -62,7 +62,7 @@ Speeds are multiples of the base speed (90 world units per second). Mass = total
 
 ### Modifiers (any meteor, shown as overlays)
 - **Phantom**: needs detection to be targeted. Children inherit Phantom.
-- **Nanite**: regrows. If it has not taken damage for 3 s it regrows one grade (back up toward its original type, never above it). Children inherit Nanite and the original type.
+- **Nanite**: regrows. If it has not taken damage for 3 s it regrows one grade (back up toward its original type, never above it). Children inherit Nanite and the original type. Regrown layers pay no extra bounty (docs/ECONOMY.md 1.1).
 - **Plated**: shell HP doubled (only meaningful on Iron, Obsidian and ships; on 1 HP shells it gives 2 HP). Children do not inherit Plated.
 
 ### Ships (Bloons MOAB class)
@@ -80,7 +80,7 @@ Specter: Phantom, immune to KINETIC and BLAST. Its first appearance (wave 50) is
 
 ### Storm Titans (boss waves)
 Every 20th wave (20, 40, 60, ...) includes a **Storm Titan**: a unique ship with a big health bar at the top of the screen, a name banner, and one special trait. Titan tier = wave / 20. Hull HP = `0.7 x sqrt(tier) x B(w)`, rising with only the square root of the late surge (docs/ECONOMY.md 4.6: about 410 at wave 20, 2.8k at 40, 12.8k at 60, 73k at 80, 1.3M at 100), speed 0.2. Leaking a Titan ends the game. Types rotate:
-- **Maw** (wave 20, 80, 140...): periodically spits meteors behind itself (grade scales with tier).
+- **Maw** (wave 20, 80, 140...): periodically spits meteors behind itself (grade scales with tier). It pays bounty for one full-speed crossing of volleys; a slowed Maw spits more but pays no more (docs/ECONOMY.md 1.1).
 - **Aegis** (wave 40, 100, 160...): a regenerating shield (25% of hull); KINETIC hits deal only 20% of their damage to it, other types full damage; the shield restores after 8 s without being hit.
 - **Rift** (wave 60, 120, 180...): at 75/50/25% hull it blinks 250 units forward along the path and briefly emits a pulse that stuns towers within 150 units for 1.5 s.
 
@@ -88,7 +88,7 @@ Every 20th wave (20, 40, 60, ...) includes a **Storm Titan**: a unique ship with
 
 Twelve towers. Each has **3 upgrade paths x 5 tiers**. Bloons crosspath rule: only one path may go above tier 2, and at most two paths may have any upgrades (e.g. 5-2-0, 0-2-4, 2-0-3 are legal; 3-3-0 and 1-1-1 are not). Only **one of each tier 5 upgrade** may exist at a time per game.
 
-Every tower has four targeting modes: **First, Last, Strong, Close** (plus tower-specific ones where noted). Towers without detection cannot target Phantoms.
+Every tower that attacks has four targeting modes: **First, Last, Strong, Close** (plus tower-specific ones where noted). Exceptions: the **Orbital Mortar** has a single **Manual** mode instead (it shells a point the player sets with Set Target), and the **Mining Rig** and **Command Beacon** never target anything, so they show no targeting control. Towers without detection cannot target Phantoms.
 
 Hotkeys in brackets. Base costs are for the Pilot (normal) difficulty.
 
@@ -153,18 +153,20 @@ Costs after multipliers round to the nearest 5.
 - Channel (path) is drawn over terrain art as a luminous gravity channel with animated chevrons flowing toward the Core.
 - Tier pips under each tower; the tower sprite changes look at tier 3+ per path.
 - Speed control: 1x, 2x, 3x. Pause. Auto-start toggle.
-- Next wave preview strip shows icons for the enemy types in the upcoming wave.
-- Tower stats panel: pops (shells destroyed), damage dealt, credits earned (rigs), targeting, sell value.
+- Next wave preview strip shows icons for the enemy types in the upcoming wave, with Phantom, Nanite and Plated badges, a New marker and a Titan chip. On narrow screens a compact strip sits in the drawer head; tapping it opens the full preview.
+- Tower stats panel: pops (shells destroyed) and damage dealt (towers that attack), credits earned (rigs), targeting, sell value. The sell note explains the value: this build phase's purchases refund in full, the rest at 70%, plus a Rig's vault.
+- Command strip: activated abilities live in a strip of their own under the map (a side column on phones held sideways), reserved for the whole run so it never covers the map, towers or other controls. More abilities than fit scroll sideways. Keys 1 to 9 use the first nine.
+- Messages (toasts), the Titan health bar, the mortar aim hint and the first-run coach stack at the top center of the map, clear of every control.
 - Audio: synthesized WebAudio sound effects (shoot, shatter, explosions, zaps, leak alarm, wave start, upgrade, sell, boss horn) and a lightweight generative ambient music loop. Volume sliders.
-- Mobile: touch placement with a confirm button, sidebar collapses to a bottom drawer.
-- Codex screen: every enemy (properties, immunities) and every tower (all 15 upgrades with costs).
+- Touch (iPad, phones): placement with Place and Cancel buttons in the command strip (the drawer folds while placing on a phone), a long press on any card, ability or preview icon shows what it does, pinch zoom and pan on the map. The sidebar becomes a bottom drawer on narrow or portrait screens.
+- Codex screen: every enemy (properties, immunities) and every tower (all 15 upgrades with costs at the chosen difficulty; inside a run, the run's difficulty).
 
 ## 10. Persistence
 
 localStorage, every access in try/catch:
-- Settings (volumes, auto-start, particles, shake, damage numbers).
-- Records: best wave per map and difficulty, total waves cleared, total shells shattered.
-- Autosave of the current run at every build phase (the field is empty then, so the save is towers + economy + wave + RNG state). "Continue" button on the title screen.
+- Settings (sound and music volume, auto-start, particle quality, screen shake, floating credit text, show FPS).
+- Records: best wave per map and difficulty, and lifetime totals (runs, waves cleared, shells shattered, Titans destroyed, time played). A Continue that replays waves never counts them twice.
+- Autosave of the current run whenever it is in the build phase, which is when the field is clear (the save is towers + economy + wave + RNG state, plus the run's play time). "Continue" button on the title screen. Waves cleared while later waves are still on the field (sent early) are saved only once the field clears; the pause menu says so, and Quit asks again when leaving would replay cleared waves.
 
 ## 11. Copy style
 

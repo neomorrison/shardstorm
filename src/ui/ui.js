@@ -1,5 +1,6 @@
 // In-game HUD: top bar, shop, commander tile, next wave preview, selected tower panel,
-// ability bar, Titan health bar, wave banners and toasts.
+// command strip (ability bar and touch Place / Cancel), Titan health bar, wave banners, toasts
+// and tooltips (hover, keyboard focus, or a long press on touch).
 // The UI never mutates sim.state directly; it only calls Sim commands (docs/ARCHITECTURE.md section 6).
 
 import {
@@ -115,6 +116,7 @@ export class UI {
     this.panel = document.getElementById('panel');
     this.overlay = document.getElementById('overlay');
     this.stage = document.getElementById('stage');
+    this.cmd = document.getElementById('cmd');
 
     /** uiState passed to renderer.render (ARCHITECTURE section 8), plus client extras. */
     this.state = {
@@ -140,10 +142,15 @@ export class UI {
     this._lastLeakFlash = 0;
     this._sellArmedUntil = 0;
     this._tipFor = null;
+    this._tipTouch = false;
+    this._lastPointer = null;
+    this._drawerRestore = false;
+    this._abilityData = new Map();
 
     this._buildHud();
     this._buildOverlay();
     this._buildPanel();
+    this._initTips();
   }
 
   get data() { return this.game.data; }
@@ -218,26 +225,35 @@ export class UI {
 
   _buildOverlay() {
     const o = this.overlay;
+    // Top-center stack: Titan bar, mortar aim hint, coach and toasts flow in one column, so
+    // they never overlap each other; the stack keeps clear of the Fit map corner.
     o.innerHTML = `
       <div class="view-ctl" hidden>
         <button type="button" class="view-ctl__fit" aria-label="Fit the whole map (0)" title="Fit the whole map (0)">${icon('fit')}<span>Fit map</span></button>
       </div>
-      <div class="titan" hidden aria-live="polite">
-        <div class="titan__label"><span class="titan__tag">Storm Titan</span><span class="titan__name"></span></div>
-        <div class="titan__bar"><div class="titan__hp"></div><div class="titan__shield"></div><span class="titan__num"></span></div>
-        <span class="titan__shield-ico" hidden>${this._artIcon('ui_shield', 'titan__shield-art', '')}</span>
+      <div class="topstack">
+        <div class="titan" hidden aria-live="polite">
+          <div class="titan__label"><span class="titan__tag">Storm Titan</span><span class="titan__name"></span></div>
+          <div class="titan__bar"><div class="titan__hp"></div><div class="titan__shield"></div><span class="titan__num"></span></div>
+          <span class="titan__shield-ico" hidden>${this._artIcon('ui_shield', 'titan__shield-art', '')}</span>
+        </div>
+        <div class="aim-hint" hidden>${icon('target')}<span class="aim-hint__text"></span></div>
+        <div class="coach" hidden><span class="coach__step"></span><span class="coach__text"></span></div>
+        <div class="toasts" role="status" aria-live="polite"></div>
       </div>
       <div class="banners" aria-live="polite"></div>
-      <div class="coach" hidden><span class="coach__step"></span><span class="coach__text"></span></div>
-      <div class="aim-hint" hidden>${icon('target')}<span>Click the map to set the target. Esc to finish.</span></div>
       <div class="ghost-tag" hidden><span class="ghost-tag__price"></span><span class="ghost-tag__why"></span></div>
-      <div class="touch-place" hidden>
-        <button type="button" class="btn btn--ghost touch-place__cancel">${icon('close')}<span>Cancel</span></button>
-        <button type="button" class="btn btn--primary touch-place__ok">${icon('check')}<span class="touch-place__label">Place</span></button>
-      </div>
-      <div class="abilities" role="toolbar" aria-label="Abilities"></div>
-      <div class="toasts" role="status" aria-live="polite"></div>
       <div class="fps" hidden></div>`;
+    // Command strip: a reserved row under the map (a side column on phones held sideways). It
+    // holds the ability bar and, while placing by touch, the Place and Cancel buttons.
+    const cmd = this.cmd;
+    cmd.innerHTML = `
+      <div class="abilities" role="toolbar" aria-label="Abilities"></div>
+      <div class="cmd__empty" aria-hidden="true"><span class="cmd__empty-ico">${icon('bolt')}</span><span class="cmd__empty-text"><b>Abilities</b><span>Tier 4 and 5 upgrades and Commanders unlock them</span></span></div>
+      <div class="touch-place" hidden>
+        <button type="button" class="btn btn--ghost touch-place__cancel" aria-label="Cancel placement">${icon('close')}<span class="touch-place__word">Cancel</span></button>
+        <button type="button" class="btn btn--primary touch-place__ok">${icon('check')}<span class="touch-place__label"></span></button>
+      </div>`;
     this.$titan = o.querySelector('.titan');
     this.$titanName = o.querySelector('.titan__name');
     this.$titanHp = o.querySelector('.titan__hp');
@@ -246,16 +262,17 @@ export class UI {
     this.$titanShieldIco = o.querySelector('.titan__shield-ico');
     this.$banners = o.querySelector('.banners');
     this.$aimHint = o.querySelector('.aim-hint');
+    this.$aimText = o.querySelector('.aim-hint__text');
     this.$coach = o.querySelector('.coach');
     this.$coachStep = o.querySelector('.coach__step');
     this.$coachText = o.querySelector('.coach__text');
     this.$ghostTag = o.querySelector('.ghost-tag');
     this.$ghostPrice = o.querySelector('.ghost-tag__price');
     this.$ghostWhy = o.querySelector('.ghost-tag__why');
-    this.$touch = o.querySelector('.touch-place');
-    this.$touchOk = o.querySelector('.touch-place__ok');
-    this.$touchLabel = o.querySelector('.touch-place__label');
-    this.$abilities = o.querySelector('.abilities');
+    this.$touch = cmd.querySelector('.touch-place');
+    this.$touchOk = cmd.querySelector('.touch-place__ok');
+    this.$touchLabel = cmd.querySelector('.touch-place__label');
+    this.$abilities = cmd.querySelector('.abilities');
     this.$toasts = o.querySelector('.toasts');
     this.$fps = o.querySelector('.fps');
     this.$viewCtl = o.querySelector('.view-ctl');
@@ -264,12 +281,19 @@ export class UI {
       this._blurAfterPointer(e.currentTarget, e);
     });
 
-    o.querySelector('.touch-place__cancel').addEventListener('click', () => this.cancelPlacing());
+    cmd.querySelector('.touch-place__cancel').addEventListener('click', () => this.cancelPlacing());
     this.$touchOk.addEventListener('click', () => this.confirmPlace());
     this.$abilities.addEventListener('click', (e) => {
       const b = e.target.closest('.ab');
       if (b) { this.game.useAbility(b.dataset.id); this._blurAfterPointer(b, e); }
     });
+    // A mouse wheel scrolls a full ability bar sideways.
+    this.$abilities.addEventListener('wheel', (e) => {
+      const a = this.$abilities;
+      if (a.scrollWidth <= a.clientWidth + 1 || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+      e.preventDefault();
+      a.scrollLeft += e.deltaMode === 1 ? e.deltaY * 16 : e.deltaY;
+    }, { passive: false });
 
     // tooltip lives at body level so it can float beside the panel
     this.$tip = el('div', 'tip');
@@ -283,7 +307,9 @@ export class UI {
     p.innerHTML = `
       <div class="drawer-head only-compact">
         <button type="button" class="drawer-toggle" aria-label="Toggle build drawer" aria-expanded="true">${icon('chevdown')}</button>
-        <div class="drawer-head__preview"></div>
+        <button type="button" class="drawer-head__preview" aria-expanded="false" aria-label="Next wave. Show the full preview">
+          <span class="mini__list"></span><span class="pv-more"></span>
+        </button>
         <button type="button" class="wave-btn wave-btn--compact" data-act="wave" aria-label="Launch wave">
           <span class="wave-btn__icon">${icon('play')}</span>
           <span class="wave-btn__text"><span class="wave-btn__main">Wave 1</span></span>
@@ -304,6 +330,8 @@ export class UI {
       </div>`;
     this.$drawerToggle = p.querySelector('.drawer-toggle');
     this.$drawerPreview = p.querySelector('.drawer-head__preview');
+    this.$miniList = p.querySelector('.mini__list');
+    this.$miniMore = p.querySelector('.drawer-head__preview .pv-more');
     this.$waveBtns.push(p.querySelector('.drawer-head [data-act="wave"]'));
     this.$shop = p.querySelector('.shop');
     this.$grid = p.querySelector('.shop__grid');
@@ -319,39 +347,40 @@ export class UI {
       this.game.launchWave();
       this._blurAfterPointer(e.currentTarget, e);
     });
-    this.$drawerToggle.addEventListener('click', () => this.setDrawer(!this.game.settings.drawer));
+    this.$drawerToggle.addEventListener('click', () => {
+      this._drawerRestore = false;
+      this.setDrawer(this.app.classList.contains('drawer-closed'));
+    });
     this.setDrawer(this.game.settings.drawer !== false, true);
+    this.$drawerPreview.addEventListener('click', () => this.togglePreview());
 
     this.$grid.addEventListener('click', (e) => {
       const b = e.target.closest('.tile');
       if (!b) return;
-      this.shopPick(b.dataset.type, e.pointerType === 'touch' || this.game.isTouch);
+      this._syncPointerKind(e);
+      this.shopPick(b.dataset.type, this.game.isTouch);
       this._blurAfterPointer(b, e);
     });
     this.$heroSlot.addEventListener('click', (e) => {
       const b = e.target.closest('button');
       if (!b) return;
+      this._syncPointerKind(e);
       if (b.dataset.heroSelect) this.select(b.dataset.heroSelect);
       else if (b.dataset.type) this.shopPick(b.dataset.type, this.game.isTouch);
       this._blurAfterPointer(b, e);
     });
+  }
 
-    // hover tooltips on shop tiles (mouse and keyboard focus)
-    const showTip = (e) => {
-      const b = e.target.closest('.tile, .hero-tile[data-type]');
-      if (!b || this.game.isTouch) return;
-      this._showTip(b);
-    };
-    const hideTip = (e) => {
-      const b = e.target.closest('.tile, .hero-tile[data-type]');
-      if (b && (!e.relatedTarget || !b.contains(e.relatedTarget))) this._hideTip();
-    };
-    for (const c of [this.$grid, this.$heroSlot]) {
-      c.addEventListener('mouseover', showTip);
-      c.addEventListener('mouseout', hideTip);
-      c.addEventListener('focusin', showTip);
-      c.addEventListener('focusout', hideTip);
-    }
+  /**
+   * Hybrid devices (an iPad with a trackpad, a touch laptop): the device that clicked a card
+   * decides how the ghost is placed. A finger gets the ghost plus Place and Cancel, a mouse or
+   * trackpad gets a ghost that follows the pointer. Keyboard clicks keep the current mode.
+   */
+  _syncPointerKind(e) {
+    if (!e || !(e.detail > 0)) return;
+    const kind = e.pointerType || this._lastPointer;
+    if (kind === 'touch' || kind === 'pen') this.game.setTouch(true);
+    else if (kind === 'mouse') this.game.setTouch(false);
   }
 
   /** Mouse clicks should not leave focus on HUD buttons (Space would re-trigger them). */
@@ -364,6 +393,40 @@ export class UI {
     this.$drawerToggle.setAttribute('aria-expanded', String(open));
     if (!silent) this.game.updateSettings({ drawer: open });
     // the stage changes size in compact layout; the renderer reads it on the next frame
+  }
+
+  /** Phones and iPad portrait: fold the drawer while a tower is being placed by touch. */
+  _collapseDrawerForPlacing() {
+    if (this.game.layout !== 'compact' || this.app.classList.contains('is-short')) return;
+    if (this.app.classList.contains('drawer-closed')) return;
+    this._drawerRestore = true;
+    this.setDrawer(false, true);
+  }
+
+  _restoreDrawer() {
+    if (!this._drawerRestore) return;
+    this._drawerRestore = false;
+    this.setDrawer(true, true);
+  }
+
+  /** Compact layout: the full next wave preview opens at the top of the drawer. */
+  togglePreview(force) {
+    const on = typeof force === 'boolean' ? force : !this.app.classList.contains('show-preview');
+    this.app.classList.toggle('show-preview', on);
+    setAttr(this.$drawerPreview, 'aria-expanded', String(on));
+    setAttr(this.$drawerPreview, 'aria-label', on ? 'Next wave. Hide the full preview' : 'Next wave. Show the full preview');
+    if (!on) return;
+    if (this.state.selectedTowerId != null) this.deselect();
+    if (this.app.classList.contains('drawer-closed')) { this._drawerRestore = false; this.setDrawer(true); }
+    this.$body.scrollTop = 0;
+  }
+
+  /** Called by the layout watcher after a resize or rotation. */
+  _layoutChanged() {
+    const portraitCompact = this.game.layout === 'compact' && !this.app.classList.contains('is-short');
+    if (this._drawerRestore && !portraitCompact) this._restoreDrawer();
+    this._renderCoach();
+    this._fitMini();
   }
 
   // ======================================================================= bind / reset
@@ -385,6 +448,11 @@ export class UI {
     this._abilityEls.clear();
     this.$abilities.innerHTML = '';
     this._hideTip();
+    this._abilityData.clear();
+    this._drawerRestore = false;
+    this.setDrawer(this.game.settings.drawer !== false, true);
+    this.togglePreview(false);
+    setClass(this.cmd, 'has-abilities', false);
     this._buildShop(sim);
     this._showView('shop');
     const sk = String(this.game.speedKey || 'f').toUpperCase();
@@ -396,11 +464,17 @@ export class UI {
     for (let w = 1; w <= Math.min(sim.state.wave, 240); w++) this._markSeen(sim, w);
     this._renderCoach();
     this.update(sim, 0);
-    // Phones show the whole map small; say once per session that it zooms.
-    if (this.game.isTouch && this.game.layout === 'compact' && !UI._zoomHinted) {
-      UI._zoomHinted = true;
-      setTimeout(() => { if (this.sim === sim) this.toast('Pinch to zoom the map, drag to pan', 'tip', 3600); }, 900);
-    }
+    // Touch screens: say once per session that the map zooms. It waits for the first tower
+    // (or the first wave) so it never lands on the ghost that a first shop tap drops.
+    this._zoomHintPending = !UI._zoomHinted;
+  }
+
+  _maybeZoomHint() {
+    if (!this._zoomHintPending || !this.game.isTouch || UI._zoomHinted) return;
+    this._zoomHintPending = false;
+    UI._zoomHinted = true;
+    const sim = this.sim;
+    setTimeout(() => { if (this.sim === sim && !this.game.over) this.toast('Pinch to zoom the map. Drag to pan it.', 'tip', 4000); }, 700);
   }
 
   /** Remembers which enemy types (and modifiers) the player has already faced this run. */
@@ -420,10 +494,14 @@ export class UI {
     setHidden(this.$coach, !on);
     if (!on) return;
     const touch = this.game.isTouch;
-    const key = this.game.layout === 'compact' ? 'below' : 'on the right';
+    // the shop is below the map in compact portrait, and on the right everywhere else
+    const below = this.game.layout === 'compact' && !this.app.classList.contains('is-short');
+    const key = below ? 'below' : 'on the right';
     if (this._coach === 1) {
       setText(this.$coachStep, '1');
-      setText(this.$coachText, `Pick a tower ${key}, then ${touch ? 'drag it' : 'place it'} beside the channel.`);
+      setText(this.$coachText, touch
+        ? `Pick a tower ${key}, drag it beside the channel, then tap Place.`
+        : `Pick a tower ${key}, then click beside the channel to place it.`);
     } else {
       setText(this.$coachStep, '2');
       setText(this.$coachText, touch ? 'Tap the wave button to launch the storm.' : 'Press Space or Launch Wave to start the storm.');
@@ -437,6 +515,7 @@ export class UI {
     this.state.selectedTowerId = null;
     this.state.aimingTowerId = null;
     this._hideTip();
+    this._restoreDrawer();
     this._updateTouchControls();
   }
 
@@ -570,6 +649,8 @@ export class UI {
     this._hideTip();
     if (touch) {
       // touch: drop the ghost in the middle of the visible map; drag to move, tap Place to confirm
+      this.togglePreview(false);
+      this._collapseDrawerForPlacing();
       const c = this.game.canvasCenterWorld();
       this.moveGhost(c.x, c.y);
     } else if (this.game.pointerWorld) {
@@ -645,6 +726,7 @@ export class UI {
     this.placeType = null;
     this.state.placing = null;
     this._updateTiles(true);
+    this._restoreDrawer();
     this._updateTouchControls();
   }
 
@@ -653,10 +735,12 @@ export class UI {
   _updateTouchControls() {
     const show = !!this.placeType && this.game.isTouch;
     setHidden(this.$touch, !show);
+    setClass(this.cmd, 'is-placing', show);
     if (show) {
       const p = this.state.placing;
       const price = p?.price ?? this.prices[this.placeType] ?? 0;
-      setHTML(this.$touchLabel, `Place ${credits(price)}`);
+      setHTML(this.$touchLabel, `<span class="touch-place__word">Place</span>${credits(price)}`);
+      setAttr(this.$touchOk, 'aria-label', `Place for ${int(price)} credits`);
       this.$touchOk.disabled = !p || !p.valid;
     }
   }
@@ -674,7 +758,8 @@ export class UI {
     this._showView('tower');
     this._panelDirty = true;
     this._refreshTowerPanel(true);
-    if (this.game.layout === 'compact' && !this.game.settings.drawer) this.setDrawer(true);
+    this.togglePreview(false);
+    if (this.game.layout === 'compact' && this.app.classList.contains('drawer-closed')) this.setDrawer(true);
   }
 
   deselect() {
@@ -728,8 +813,8 @@ export class UI {
         <button type="button" class="icon-btn tp__close" aria-label="Close (Esc)" title="Close (Esc)">${icon('close')}</button>
       </header>
       <div class="tp__stats">
-        <div class="kv"><span class="kv__k">Pops</span><span class="kv__v" data-k="pops">0</span></div>
-        <div class="kv"><span class="kv__k">Damage</span><span class="kv__v" data-k="dmg">0</span></div>
+        <div class="kv" data-row="pops"><span class="kv__k">Pops</span><span class="kv__v" data-k="pops">0</span></div>
+        <div class="kv" data-row="dmg"><span class="kv__k">Damage</span><span class="kv__v" data-k="dmg">0</span></div>
         <div class="kv" data-row="cash"><span class="kv__k">Credits</span><span class="kv__v kv__v--cr" data-k="cash">0</span></div>
       </div>
       <div class="tp__hero" hidden>
@@ -772,6 +857,7 @@ export class UI {
       id: t.id, def, hero,
       portrait: q('.tp__portrait'), levels: q('.tp__levels'), dtype: q('.tp__dtype'),
       pops: q('[data-k="pops"]'), dmg: q('[data-k="dmg"]'), cash: q('[data-k="cash"]'), cashRow: q('[data-row="cash"]'),
+      popsRow: q('[data-row="pops"]'), dmgRow: q('[data-row="dmg"]'), stats: q('.tp__stats'),
       heroBox: q('.tp__hero'), lvl: q('.tp__lvl'), xpText: q('.tp__xp-text'), xpFill: q('.xpbar i'), heroNotes: q('.tp__hero-notes'),
       target: q('.tp__target'), mode: q('.tp__mode'),
       aim: q('.tp__aim'), vault: q('.tp__vault'), vaultAmt: q('.tp__vault-amt'), extra: q('.tp__extra'),
@@ -822,12 +908,18 @@ export class UI {
     const det = t.stats?.detection || info.detection;
     setHTML(tp.dtype, [dt ? esc(dtypeLabel(dt)) : null, det ? '<span class="tp__det">Detection</span>' : null].filter(Boolean).join('<span class="dot"></span>'));
 
-    setText(tp.pops, short(info.pops ?? t.pops ?? 0));
-    setText(tp.dmg, short(info.damage ?? t.damage ?? 0));
+    const pops = info.pops ?? t.pops ?? 0, dmg = info.damage ?? t.damage ?? 0;
+    // Rigs and Beacons never attack: no Pops or Damage row unless they somehow scored some
+    const fights = tp.hero || hasTargetingAttack(t.stats) || pops > 0 || dmg > 0;
+    setHidden(tp.popsRow, !fights);
+    setHidden(tp.dmgRow, !fights);
+    setText(tp.pops, short(pops));
+    setText(tp.dmg, short(dmg));
     const earned = info.cashEarned ?? t.cashEarned ?? 0;
     const showCash = earned > 0 || !!t.stats?.income;
     setHidden(tp.cashRow, !showCash);
     if (showCash) setHTML(tp.cash, credits(earned));
+    setHidden(tp.stats, !fights && !showCash);
 
     // commander
     setHidden(tp.heroBox, !tp.hero);
@@ -913,16 +1005,35 @@ export class UI {
     }
 
     // sell / undo
-    let sv = 0;
-    try { sv = numOf(sim.sellValue(t.id)); } catch { sv = 0; }
-    const undo = !!t.undoable;
+    const sell = this._sellInfo(sim, t);
     const armed = performance.now() < this._sellArmedUntil;
-    setText(tp.sellLabel, armed ? 'Confirm' : undo ? 'Undo' : 'Sell');
-    setHTML(tp.sellVal, credits(sv));
-    setClass(tp.sell, 'is-undo', undo);
+    setText(tp.sellLabel, armed ? 'Confirm' : sell.undo ? 'Undo' : 'Sell');
+    setHTML(tp.sellVal, credits(sell.value));
+    setClass(tp.sell, 'is-undo', sell.undo);
     setClass(tp.sell, 'is-armed', armed);
-    setAttr(tp.sell, 'aria-label', `${undo ? 'Undo placement, full refund' : 'Sell'} for ${int(sv)} credits (Delete)`);
-    setText(tp.footNote, undo ? 'Full refund until the next wave' : `Refunds ${Math.round(SELL_RATE * 100)}% of credits paid`);
+    setAttr(tp.sell, 'aria-label', `${sell.undo ? 'Undo placement, full refund' : 'Sell'} for ${int(sell.value)} credits${this.game.isTouch ? '' : ' (Delete)'}`);
+    setText(tp.footNote, sell.note);
+  }
+
+  /**
+   * What selling a tower pays and why, from the same parts the sim adds up (src/sim/economy.js
+   * sellValue): what was spent this build phase comes back in full, the rest at the sell rate,
+   * plus a Rig's banked vault. `undo` means the whole tower was bought this build phase.
+   */
+  _sellInfo(sim, t) {
+    let value = 0;
+    try { value = numOf(sim.sellValue(t.id)); } catch { value = 0; }
+    const paid = Math.max(0, Number(t.paid) || 0);
+    const back = Math.min(Math.max(0, Number(t.undoPaid) || 0), paid);
+    const vault = Math.floor(Math.max(0, Number(t.data?.vault ?? t.data?.vaultBalance ?? 0)) + 1e-9);
+    const rate = `${Math.round(SELL_RATE * 100)}%`;
+    const undo = paid > 0 && back >= paid;
+    let note;
+    if (undo) note = 'Full refund until the next wave';
+    else if (back > 0) note = `This phase's upgrades (${int(back)}) refund in full, the rest ${rate}`;
+    else note = `Refunds ${rate} of credits paid`;
+    if (vault >= 1) note += `, plus ${int(vault)} from the vault`;
+    return { value, undo, note };
   }
 
   _heroNotes(def, level, info) {
@@ -934,7 +1045,7 @@ export class UI {
       return `<ul class="hero-abil">${list.map((a) => {
         const lvl = a.level ?? a.unlock ?? 0;
         const on = level >= lvl;
-        return `<li class="${on ? 'on' : ''}" title="${esc(clean(a.desc || ''))}"><span class="hero-abil__lvl">L${lvl}</span><span class="hero-abil__name">${esc(clean(a.name || ''))}</span></li>`;
+        return `<li class="${on ? 'on' : ''}" tabindex="0" data-tip-title="${esc(clean(a.name || ''))}" data-tip-sub="${on ? 'Unlocked' : `Unlocks at level ${lvl}`}" data-tip-body="${esc(clean(a.desc || ''))}"><span class="hero-abil__lvl">L${lvl}</span><span class="hero-abil__name">${esc(clean(a.name || ''))}</span></li>`;
       }).join('')}</ul>${nextLine}`;
     }
     const have = (info?.abilities || []).map((a) => `<li class="on"><span class="hero-abil__lvl">${icon('bolt')}</span><span class="hero-abil__name">${esc(clean(a.name || a.id))}</span></li>`).join('');
@@ -981,10 +1092,12 @@ export class UI {
     const sim = this.sim;
     const t = this._tower(this.state.selectedTowerId);
     if (!sim || !t) return;
+    // towers that never pick targets (Rigs, Beacons) have no targeting row: nothing to cycle
+    if (!hasTargetingAttack(t.stats) && !this._isHero(t)) return;
     let info = {};
     try { info = sim.towerInfo(t.id) || {}; } catch { info = {}; }
     const modes = info.modes || t.stats?.targetModes || this._defOf(t).base?.targetModes || ['first', 'last', 'strong', 'close'];
-    if (!modes.length) return;
+    if (modes.length <= 1) return;
     const cur = modes.indexOf(info.targeting || t.targeting);
     const next = modes[(cur + dir + modes.length) % modes.length];
     try { sim.setTargeting(t.id, next); } catch (err) { console.error(err); }
@@ -1031,9 +1144,8 @@ export class UI {
     const now = performance.now();
     if (!immediate && now >= this._sellArmedUntil) {
       this._sellArmedUntil = now + 2200;
-      let sv = 0;
-      try { sv = numOf(sim.sellValue(t.id)); } catch { sv = 0; }
-      this.toast(`Press again to ${t.undoable ? 'undo' : 'sell'} for ${int(sv)} credits`, 'info');
+      const sell = this._sellInfo(sim, t);
+      this.toast(`Press again to ${sell.undo ? 'undo' : 'sell'} for ${int(sell.value)} credits`, 'info');
       this._refreshTowerPanel();
       return;
     }
@@ -1053,7 +1165,7 @@ export class UI {
     if (this._hintSim !== this.sim) { this._hintSim = this.sim; this._hintsShown = new Set(); }
     if (this._hintsShown.has(type)) return;
     this._hintsShown.add(type);
-    this.toast(hint, 'tip', 9000);
+    this.toast(hint, 'tip', 7000);
   }
 
   onEvents(events) {
@@ -1064,8 +1176,9 @@ export class UI {
           if (this.sim && this._seen) this._markSeen(this.sim, e.wave);
           if (this._coach) { this._coach = 0; this._renderCoach(); this.game.updateSettings({ coach: false }); }
           this.banner(`Wave ${e.wave}`, e.name || (e.titan || e.wave % TITAN_EVERY === 0 ? 'Titan wave' : ''), 'wave');
-          if (e.tip && !this.game.over) this.toast(e.tip, 'tip', 7000);
+          if (e.tip && !this.game.over) this.toast(e.tip, 'tip', 6000);
           this._previewWave = -1;
+          this._maybeZoomHint();
           break;
         case 'waveCleared':
           this.banner(`Wave ${e.wave} cleared`, e.bonus ? `+${int(e.bonus)} bonus` : '', 'clear');
@@ -1109,6 +1222,7 @@ export class UI {
             this.banner(e.name || 'Tier 5', `${def?.name || 'Tower'} reaches tier 5`, 'win');
           }
           if (e.t === 'place' && this._coach === 1) { this._coach = 2; this._renderCoach(); }
+          if (e.t === 'place') this._maybeZoomHint();
           this._panelDirty = true;
           if (e.t === 'sell' && (e.tower === this.state.selectedTowerId)) this.deselect();
           if (this.placeType && this.state.placing) {
@@ -1185,11 +1299,38 @@ export class UI {
     this._updateTitan(s);
 
     // --- aim hint, coach, ghost tag
-    setHidden(this.$aimHint, this.state.aimingTowerId == null);
-    if (this._coach) setHidden(this.$coach, this.state.aimingTowerId != null || !!s.titan);
+    const aiming = this.state.aimingTowerId != null;
+    setHidden(this.$aimHint, !aiming);
+    if (aiming) {
+      setText(this.$aimText, this.game.isTouch
+        ? 'Tap the map to set the target. Tap Set Target again to finish.'
+        : 'Click the map to set the target. Press Esc to finish.');
+    }
+    if (this._coach) {
+      setHidden(this.$coach, aiming || !!s.titan);
+      this._fadeCoach();
+    }
     this._updateGhostTag();
     if (this.game.isTouch) this._updateTouchControls();
     setHidden(this.$viewCtl, !((this.game.renderer?.zoom || 1) > 1.01));
+  }
+
+  /** The coach bubble fades while the ghost or the pointer is near it (towers can sit there). */
+  _fadeCoach() {
+    const c = this.$coach;
+    if (!c || c.hidden) return;
+    const p = this.state.placing;
+    const pw = this.game.pointerWorld;
+    let pt = null;
+    if (p) pt = this.game.worldToScreen(p.x, p.y);
+    else if (pw && pw.inside && !this.game.isTouch) pt = { x: pw.px, y: pw.py };
+    let near = false;
+    if (pt) {
+      const cr = c.getBoundingClientRect(), vr = this.game.canvas.getBoundingClientRect();
+      const x = vr.left + pt.x, y = vr.top + pt.y;
+      near = x > cr.left - 50 && x < cr.right + 50 && y < cr.bottom + 70 && y > cr.top - 70;
+    }
+    setClass(c, 'is-faded', near);
   }
 
   _updateWaveButtons(sim) {
@@ -1197,7 +1338,8 @@ export class UI {
     const next = s.wave + 1;
     let can = false;
     try { can = okOf(sim.canStartWave()); } catch { can = false; }
-    let label, mode, disabled = false, sub = 'Space';
+    // the Space hint only helps with a keyboard
+    let label, mode, disabled = false, sub = this.game.isTouch ? '' : 'Space';
     if (s.phase === 'over' || this.game.over) { label = 'Core lost'; mode = 'over'; disabled = true; sub = ''; }
     else if (s.phase === 'build') { label = `Launch Wave ${next}`; mode = 'launch'; disabled = !can; }
     else if (can) { label = `Send Wave ${next} early`; mode = 'early'; }
@@ -1214,7 +1356,7 @@ export class UI {
       setAttr(b, 'data-mode', mode);
       setClass(b, 'is-titan', titan);
       setAttr(b, 'aria-disabled', disabled ? 'true' : null);
-      setAttr(b, 'aria-label', `${label}${titan ? ', Titan wave' : ''} (Space)`);
+      setAttr(b, 'aria-label', `${label}${titan ? ', Titan wave' : ''}${this.game.isTouch ? '' : ' (Space)'}`);
       const ic = b.querySelector('.wave-btn__icon');
       setHTML(ic, mode === 'early' ? icon('fast') : icon('play'));
     }
@@ -1238,6 +1380,7 @@ export class UI {
     if (!h) return;
     const tower = this._heroTower();
     const s = sim.state;
+    // every state class is written in both branches, so none can go stale
     if (tower) {
       const hp = this.heroProgress(tower);
       const key = `on:${hp.level}:${Math.round(hp.frac * 50)}:${this.state.selectedTowerId === tower.id}`;
@@ -1253,6 +1396,8 @@ export class UI {
         setVar(h.xpEl, '--fill', String(hp.frac));
         setClass(h.el, 'is-deployed', true);
         setClass(h.el, 'is-selected', this.state.selectedTowerId === tower.id);
+        setClass(h.el, 'is-active', false);
+        setClass(h.el, 'is-poor', false);
         setAttr(h.el, 'aria-label', `${h.def.name}, level ${hp.level}. Select`);
       }
     } else {
@@ -1266,9 +1411,10 @@ export class UI {
         setHidden(h.xpEl, true);
         setHidden(h.keyEl, false);
         setClass(h.el, 'is-deployed', false);
+        setClass(h.el, 'is-selected', false);
         setClass(h.el, 'is-poor', s.cash < h.price);
         setClass(h.el, 'is-active', this.placeType === h.id);
-        setAttr(h.el, 'aria-label', `Deploy ${h.def.name}, ${int(h.price)} credits, hotkey U`);
+        setAttr(h.el, 'aria-label', `Deploy ${h.def.name}, ${int(h.price)} credits${this.game.isTouch ? '' : ', hotkey U'}`);
       }
     }
   }
@@ -1302,53 +1448,118 @@ export class UI {
     const ENEMIES = this.data.ENEMIES;
     const frag = document.createDocumentFragment();
     const mini = document.createDocumentFragment();
-    items.forEach((g, i) => {
+    const titanTip = { title: 'Storm Titan', sub: `Wave ${w}`, body: 'A boss ship with a health bar at the top of the screen. Leaking it ends the run.' };
+    if (titan) {
+      // first in the compact strip, so it is never cut off
+      const m = el('span', 'pv pv--mini pv--titan');
+      m.innerHTML = `<span class="pv__skull">${icon('skull')}</span><span class="pv__n">Titan</span>`;
+      m._tip = titanTip;
+      mini.appendChild(m);
+    }
+    items.forEach((g) => {
       const def = ENEMIES[g.type];
       const name = def?.name || g.type;
       const badges = [
-        g.mods.phantom ? '<i class="mod mod--phantom" title="Phantom: needs detection">P</i>' : '',
-        g.mods.nanite ? '<i class="mod mod--nanite" title="Nanite: regrows">N</i>' : '',
-        g.mods.plated ? '<i class="mod mod--plated" title="Plated: double shell">+</i>' : '',
+        g.mods.phantom ? '<i class="mod mod--phantom">P</i>' : '',
+        g.mods.nanite ? '<i class="mod mod--nanite">N</i>' : '',
+        g.mods.plated ? '<i class="mod mod--plated">+</i>' : '',
       ].join('');
       const seen = this._seen || new Set();
       const fresh = w > 1 && (!seen.has(g.type) || (g.mods.phantom && !seen.has('mod:phantom')) || (g.mods.nanite && !seen.has('mod:nanite')) || (g.mods.plated && !seen.has('mod:plated')));
+      const tip = this._enemyTip(g, def, name, fresh);
       const d = el('div', `pv${fresh ? ' pv--new' : ''}`);
-      d.title = `${g.count} ${name}${g.mods.phantom ? ', Phantom' : ''}${g.mods.nanite ? ', Nanite' : ''}${g.mods.plated ? ', Plated' : ''}${g.mods.scout ? ', Scout (empty hold, light hull)' : ''}${fresh ? '. New threat' : ''}`;
+      d.tabIndex = 0;
+      d.setAttribute('aria-label', `${g.count} ${tip.title}. ${tip.body}`);
+      d._tip = tip;
       d.innerHTML = `<canvas></canvas><span class="pv__n">${short(g.count)}</span>${badges ? `<span class="pv__mods">${badges}</span>` : ''}${fresh ? '<span class="pv__new">New</span>' : ''}`;
       this.game.icons.enemy(d.querySelector('canvas'), g.type, 30, g.mods);
       frag.appendChild(d);
-      if (i < 5) {
-        const m = el('div', 'pv pv--mini');
-        m.innerHTML = `<canvas></canvas><span class="pv__n">${short(g.count)}</span>`;
-        this.game.icons.enemy(m.querySelector('canvas'), g.type, 22, g.mods);
-        mini.appendChild(m);
-      }
+      const m = el('span', `pv pv--mini${fresh ? ' pv--new' : ''}`);
+      m._tip = tip;
+      m.innerHTML = `<canvas></canvas><span class="pv__n">${short(g.count)}</span>${badges ? `<span class="pv__mods">${badges}</span>` : ''}${fresh ? '<span class="pv__dot"></span>' : ''}`;
+      this.game.icons.enemy(m.querySelector('canvas'), g.type, 22, g.mods);
+      mini.appendChild(m);
     });
     if (titan) {
       const d = el('div', 'pv pv--titan');
-      d.title = 'Storm Titan';
+      d.tabIndex = 0;
+      d._tip = titanTip;
+      d.setAttribute('aria-label', 'Storm Titan');
       d.innerHTML = `<span class="pv__skull">${icon('skull')}</span><span class="pv__n">Titan</span>`;
       frag.appendChild(d);
     }
     if (!items.length && !titan) frag.appendChild(el('div', 'preview__empty', 'Scanning the storm'));
     this.$previewList.replaceChildren(frag);
-    if (items.length > 5) mini.appendChild(el('span', 'pv-more', `+${items.length - 5}`));
-    this.$drawerPreview.replaceChildren(mini);
+    this.$miniList.replaceChildren(mini);
+    this._fitMini();
+  }
+
+  /** Tooltip text for one entry of the wave preview. */
+  _enemyTip(g, def, name, fresh) {
+    const lines = [];
+    if (g.mods.phantom) lines.push('Phantom: only towers with detection can target it.');
+    if (g.mods.nanite) lines.push('Nanite: regrows a grade after 3 s without damage.');
+    if (g.mods.plated) lines.push('Plated: double shell HP.');
+    if (g.mods.scout) lines.push('Scout: an empty hold and a light hull.');
+    const imm = (def?.immune || []).map((t) => dtypeLabel(t));
+    if (imm.length) lines.push(`Immune to ${imm.join(' and ')}.`);
+    if (!lines.length) lines.push(def?.kind === 'ship' ? 'A ship. It cracks open and spills its cargo.' : 'No immunities.');
+    const mods = [g.mods.phantom ? 'Phantom' : '', g.mods.nanite ? 'Nanite' : '', g.mods.plated ? 'Plated' : ''].filter(Boolean).join(' ');
+    return { title: `${mods ? mods + ' ' : ''}${name}`, sub: `${int(g.count)} in the next wave${fresh ? '. New threat' : ''}`, body: lines.join(' ') };
+  }
+
+  /** Marks a full ability bar as scrollable (its edges fade to show there is more). */
+  _abilityScroll() {
+    const a = this.$abilities;
+    if (!a) return;
+    const over = a.scrollWidth > a.clientWidth + 1 || a.scrollHeight > a.clientHeight + 1;
+    setClass(a, 'is-scroll', over);
+  }
+
+  /** Compact drawer head: show the preview icons that fit and count the rest. */
+  _fitMini() {
+    this._abilityScroll();
+    const list = this.$miniList;
+    if (!list) return;
+    const kids = [...list.children];
+    for (const k of kids) k.hidden = false;
+    setText(this.$miniMore, '');
+    if (!kids.length || list.offsetParent === null) return;
+    const hideOverflow = () => {
+      const right = list.getBoundingClientRect().right;
+      let n = 0;
+      for (const k of kids) {
+        if (k.classList.contains('pv--titan')) continue;
+        if (n || k.getBoundingClientRect().right > right + 0.5) { k.hidden = true; n++; }
+      }
+      return n;
+    };
+    let n = hideOverflow();
+    if (n) {
+      setText(this.$miniMore, `+${n}`);
+      for (const k of kids) k.hidden = false;
+      n = hideOverflow();
+      setText(this.$miniMore, n ? `+${n}` : '');
+    }
   }
 
   _updateAbilities(sim) {
     let bar = [];
     try { bar = sim.abilityBar() || []; } catch { bar = []; }
     const key = bar.map((a) => a.id).join('|');
+    this._abilityData.clear();
+    bar.forEach((a, i) => this._abilityData.set(a.id, { a, i }));
     if (key !== this._abilityKey) {
       this._abilityKey = key;
       this._abilityEls.clear();
+      setClass(this.cmd, 'has-abilities', bar.length > 0);
+      if (this._tipFor && String(this._tipFor).startsWith('ab:')) this._hideTip();
       const frag = document.createDocumentFragment();
       bar.forEach((a, i) => {
         const b = el('button', 'ab');
         b.type = 'button';
         b.dataset.id = a.id;
-        b.innerHTML = `<canvas></canvas><span class="ab__sweep"></span><span class="ab__glyph"></span><span class="ab__cd"></span><kbd class="ab__key">${i < 9 ? i + 1 : ''}</kbd><span class="ab__count"></span><span class="ab__name"><b>${esc(clean(a.name || a.id))}</b>${a.desc ? `<span>${esc(clean(a.desc))}</span>` : ''}</span>`;
+        b.innerHTML = `<canvas></canvas><span class="ab__sweep"></span><span class="ab__glyph"></span><span class="ab__cd"></span>${i < 9 ? `<kbd class="ab__key">${i + 1}</kbd>` : ''}<span class="ab__count"></span>`;
         const tower = this._tower(a.towerIds?.[0]);
         if (tower) {
           const def = this._defOf(tower);
@@ -1364,6 +1575,7 @@ export class UI {
         this._abilityEls.set(a.id, { el: b, sweep: b.querySelector('.ab__sweep'), count: b.querySelector('.ab__count'), cd: b.querySelector('.ab__cd') });
       });
       this.$abilities.replaceChildren(frag);
+      this._abilityScroll();
     }
     for (let i = 0; i < bar.length; i++) {
       const a = bar[i];
@@ -1377,8 +1589,7 @@ export class UI {
       const n = a.towerIds?.length || 0;
       setText(r.count, n > 1 ? `x${n}` : '');
       setText(r.cd, a.ready || !(a.cd > 0) ? '' : String(Math.ceil(a.cd)));
-      setAttr(r.el, 'aria-label', `${clean(a.name || a.id)}${usable ? ', ready' : a.ready ? ', ready when the next wave starts' : ', cooling down'}${i < 9 ? `. Hotkey ${i + 1}` : ''}`);
-      setAttr(r.el, 'title', a.ready && !usable ? 'Ready. Use it during a wave.' : null);
+      setAttr(r.el, 'aria-label', `${clean(a.name || a.id)}${usable ? ', ready' : a.ready ? ', ready when the next wave starts' : ', cooling down'}${i < 9 && !this.game.isTouch ? `. Hotkey ${i + 1}` : ''}`);
       setAttr(r.el, 'aria-disabled', usable ? null : 'true');
     }
   }
@@ -1439,7 +1650,7 @@ export class UI {
     setTimeout(() => { b.classList.add('out'); setTimeout(() => b.remove(), 300); }, life);
   }
 
-  toast(msg, kind = 'info', ms = 2400) {
+  toast(msg, kind = 'info', ms = 2200) {
     const text = String(msg);
     for (const t of this.$toasts.children) {
       if (t._msg === text) {
@@ -1455,7 +1666,9 @@ export class UI {
     t._msg = text;
     t.innerHTML = `<span class="toast__msg">${esc(text)}</span><span class="toast__n"></span>`;
     this.$toasts.appendChild(t);
-    while (this.$toasts.children.length > 3) this.$toasts.firstElementChild.remove();
+    // the stack sits over the top of the map: three at most, two on small screens
+    const max = this.game.layout === 'compact' ? 2 : 3;
+    while (this.$toasts.children.length > max) this.$toasts.firstElementChild.remove();
     t._timer = setTimeout(() => this._dropToast(t), ms);
   }
 
@@ -1464,46 +1677,161 @@ export class UI {
     setTimeout(() => t.remove(), 250);
   }
 
-  _showTip(tile) {
-    const type = tile.dataset.type;
+  // ---- tooltips: mouse hover, keyboard focus, or a long press on touch ------------------
+
+  /**
+   * One floating tip serves shop cards, the Commander card, abilities, wave preview icons and
+   * Commander ability rows. Touch has no hover, so a long press (450 ms, finger still) shows
+   * the same tip instead of picking, firing or toggling, and the click that follows is eaten.
+   */
+  _initTips() {
+    const SEL = '.tile, .hero-tile, .ab, .pv, .hero-abil li';
+    const app = this.app;
+    let lp = null;
+    const stop = () => { if (lp) { clearTimeout(lp.timer); lp = null; } };
+    app.addEventListener('pointerdown', (e) => {
+      this._lastPointer = e.pointerType || this._lastPointer;
+      this._suppress = null;
+      if (this._tipTouch) this._hideTip();
+      stop();
+      if (e.pointerType === 'mouse') return;
+      const t = e.target.closest?.(SEL);
+      if (!t) return;
+      const cur = { el: t, id: e.pointerId, x: e.clientX, y: e.clientY };
+      cur.timer = setTimeout(() => {
+        if (lp !== cur || !t.isConnected) return;
+        this._suppress = t;
+        this._showTipFor(t, true);
+      }, 450);
+      lp = cur;
+    }, true);
+    app.addEventListener('pointermove', (e) => {
+      if (lp && e.pointerId === lp.id && Math.hypot(e.clientX - lp.x, e.clientY - lp.y) > 10) stop();
+    }, true);
+    const end = (e) => { if (lp && e.pointerId === lp.id) stop(); };
+    app.addEventListener('pointerup', end, true);
+    app.addEventListener('pointercancel', end, true);
+    app.addEventListener('click', (e) => {
+      const s = this._suppress;
+      if (s && s.contains(e.target)) { this._suppress = null; e.preventDefault(); e.stopPropagation(); }
+    }, true);
+    app.addEventListener('contextmenu', (e) => { if (e.target.closest?.(SEL)) e.preventDefault(); });
+
+    app.addEventListener('pointerover', (e) => {
+      if (e.pointerType !== 'mouse') return;
+      const t = e.target.closest?.(SEL);
+      if (t && !(e.relatedTarget && t.contains(e.relatedTarget))) this._showTipFor(t, false);
+    });
+    app.addEventListener('pointerout', (e) => {
+      if (e.pointerType !== 'mouse' || this._tipTouch) return;
+      const t = e.target.closest?.(SEL);
+      if (t && (!e.relatedTarget || !t.contains(e.relatedTarget))) this._hideTip();
+    });
+    app.addEventListener('focusin', (e) => {
+      const t = e.target.closest?.(SEL);
+      let fv = false;
+      try { fv = e.target.matches(':focus-visible'); } catch { fv = false; }
+      if (t && fv) this._showTipFor(t, false);
+    });
+    app.addEventListener('focusout', (e) => {
+      const t = e.target.closest?.(SEL);
+      if (t && !this._tipTouch && (!e.relatedTarget || !t.contains(e.relatedTarget))) this._hideTip();
+    });
+    // a scrolling panel or strip would leave the tip pointing at nothing
+    for (const sc of [this.$body, this.$abilities]) sc?.addEventListener('scroll', () => { if (!this._tipTouch) this._hideTip(); }, { passive: true });
+  }
+
+  _showTipFor(t, touch) {
+    if (!this.sim) return;
+    if (t.matches('.tile')) this._showTip(t, touch);
+    else if (t.matches('.hero-tile')) { if (this._hero) this._showTip(t, touch, this._hero.id); }
+    else if (t.matches('.ab')) this._showAbilityTip(t, touch);
+    else if (t._tip) this._placeTip(this._simpleTip(t._tip), t, 'auto', 'el', touch);
+    else if (t.dataset.tipTitle) this._placeTip(this._simpleTip({ title: t.dataset.tipTitle, sub: t.dataset.tipSub, body: t.dataset.tipBody }), t, 'auto', 'el', touch);
+  }
+
+  _simpleTip({ title, sub, body }) {
+    return `<div class="tip__head"><span class="tip__name">${esc(title || '')}</span></div>${sub ? `<div class="tip__sub">${esc(sub)}</div>` : ''}${body ? `<p class="tip__blurb">${esc(body)}</p>` : ''}`;
+  }
+
+  /** Places the tip beside `anchor` and keeps it inside the window. */
+  _placeTip(html, anchor, side, key, touch) {
+    if (this._tipFor !== key && !touch) this.game.uiHover();
+    this._tipFor = key;
+    this._tipTouch = !!touch;
+    clearTimeout(this._tipTimer);
+    if (touch) this._tipTimer = setTimeout(() => this._hideTip(), 4000);
+    const tip = this.$tip;
+    tip.innerHTML = html;
+    tip.hidden = false;
+    const r = anchor.getBoundingClientRect();
+    const tw = tip.offsetWidth, th = tip.offsetHeight;
+    const W = window.innerWidth, H = window.innerHeight, m = 8;
+    let x, y;
+    if (side === 'panel') {
+      const pr = this.panel.getBoundingClientRect();
+      x = pr.left - tw - 10;
+      y = r.top + r.height / 2 - th / 2;
+      y = Math.max(this.hud.getBoundingClientRect().bottom + 8, y);
+    } else if (side === 'left') {
+      x = r.left - tw - 10;
+      y = r.top + r.height / 2 - th / 2;
+    } else {
+      x = r.left + r.width / 2 - tw / 2;
+      y = r.top - th - 10;
+      if (y < m) y = r.bottom + 10;
+    }
+    x = Math.max(m, Math.min(W - tw - m, x));
+    y = Math.max(m, Math.min(H - th - m, y));
+    tip.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
+  }
+
+  _showTip(tile, touch = false, typeOverride = null) {
+    const type = typeOverride || tile.dataset.type;
     const def = this.data.TOWERS[type] || this.data.HEROES[type];
     if (!def) return;
-    if (this._tipFor !== type) this.game.uiHover();
-    this._tipFor = type;
     const price = this.prices[type] ?? 0;
+    const hero = type === this._heroId();
     const dt = primaryDtype(def.base);
     const range = def.base?.range;
     const det = def.base?.detection;
-    const key = type === this._heroId() ? 'U' : (def.hotkey || '').toUpperCase();
+    const key = this.game.isTouch ? '' : hero ? (this.game.heroHotkey ? 'U' : '') : (def.hotkey || '').toUpperCase();
     const facts = [];
     if (dt) facts.push(`<span class="chip chip--dtype" style="--chip:var(--dt-${dt.toLowerCase()}, #9fb0cf)">${esc(dtypeLabel(dt))}</span>`);
     if (range === Infinity || Number.isFinite(range)) facts.push(`<span class="tip__fact">Range ${range >= 5000 ? 'global' : int(range)}</span>`);
     const aura = def.base?.aura?.radius;
     if (Number.isFinite(aura) && aura > 0) facts.push(`<span class="tip__fact">Aura ${int(aura)}</span>`);
     if (det) facts.push('<span class="tip__fact tip__fact--det">Detection</span>');
-    this.$tip.innerHTML = `
+    const deployed = hero && this._heroTower();
+    const html = `
       <div class="tip__head"><span class="tip__name">${esc(def.name)}</span>${key ? `<kbd>${esc(key)}</kbd>` : ''}</div>
       <p class="tip__blurb">${esc(clean(def.blurb || def.desc || def.role || ''))}</p>
       <div class="tip__facts">${facts.join('')}</div>
-      <div class="tip__price">${credits(price)}</div>`;
-    this.$tip.hidden = false;
-    const r = tile.getBoundingClientRect();
-    const tw = this.$tip.offsetWidth, th = this.$tip.offsetHeight;
-    let x, y;
-    if (this.game.layout === 'compact') {
-      x = Math.min(window.innerWidth - tw - 8, Math.max(8, r.left + r.width / 2 - tw / 2));
-      y = r.top - th - 8;
-    } else {
-      const pr = this.panel.getBoundingClientRect();
-      const top = this.hud.getBoundingClientRect().bottom + 8;
-      x = pr.left - tw - 10;
-      y = Math.min(window.innerHeight - th - 8, Math.max(top, r.top + r.height / 2 - th / 2));
-    }
-    this.$tip.style.transform = `translate(${Math.round(x)}px, ${Math.round(y)}px)`;
+      ${deployed ? '' : `<div class="tip__price">${credits(price)}</div>`}`;
+    const side = this.game.layout === 'wide' || this.app.classList.contains('is-short') ? 'panel' : 'auto';
+    this._placeTip(html, tile, side, 'tower:' + type, touch);
+  }
+
+  _showAbilityTip(b, touch) {
+    const d = this._abilityData.get(b.dataset.id);
+    if (!d) return;
+    const { a, i } = d;
+    const usable = !!a.ready && a.usable !== false;
+    const state = usable ? 'Ready' : a.ready ? 'Ready. Use it during a wave' : a.cd > 0 ? `Recharging, ${Math.ceil(a.cd)} s` : 'Recharging';
+    const n = a.towerIds?.length || 0;
+    const key = i < 9 && !this.game.isTouch ? `<kbd>${i + 1}</kbd>` : '';
+    const html = `
+      <div class="tip__head"><span class="tip__name">${esc(clean(a.name || a.id))}</span>${key}</div>
+      <div class="tip__sub${usable ? ' tip__sub--ok' : ''}">${esc(state)}${n > 1 ? `. ${n} towers share it` : ''}</div>
+      ${a.desc ? `<p class="tip__blurb">${esc(clean(a.desc))}</p>` : ''}`;
+    const side = this.app.classList.contains('is-short') && this.game.layout === 'compact' ? 'left' : 'auto';
+    this._placeTip(html, b, side, 'ab:' + a.id, touch);
   }
 
   _hideTip() {
     this._tipFor = null;
+    this._tipTouch = false;
+    clearTimeout(this._tipTimer);
     if (this.$tip) this.$tip.hidden = true;
   }
 }

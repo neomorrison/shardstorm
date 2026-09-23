@@ -24,14 +24,6 @@ const BURST_THRESHOLD = 6;
 function clamp(v, lo, hi) { return v < lo ? lo : v > hi ? hi : v; }
 function clamp01(v) { return clamp(v, 0, 1); }
 
-// Safari 16.4+ Audio Session API: 'playback' lets game audio play when an iPhone or iPad is on
-// silent or in a Focus mode (the default 'auto'/'ambient' session is muted there). No-op elsewhere.
-function requestPlaybackSession() {
-  try {
-    const s = typeof navigator !== 'undefined' ? navigator.audioSession : null;
-    if (s && s.type !== 'playback') s.type = 'playback';
-  } catch { /* ignore */ }
-}
 function lerp(a, b, t) { return a + (b - a) * t; }
 
 // Aggregate gain for a representative sound standing in for `count` individual events.
@@ -60,11 +52,40 @@ function popFreq(type) {
 
 const KNOWN_SHOT_VISUALS = new Set(['bolt', 'shard', 'slug', 'rail', 'missile', 'mortar', 'tesla', 'cryo', 'flame', 'orb']);
 const DTYPE_VISUAL = { KINETIC: 'bolt', BLAST: 'mortar', THERMAL: 'flame', CRYO: 'cryo', ENERGY: 'tesla', VOID: 'orb' };
+// Many tower upgrade trees rename a.visual on the same base attack purely for the renderer's
+// sprite/particle choice (src/data/towers/*.js, src/data/heroes.js), without changing dtype.
+// Map every such renamed string back to the sound family it actually still belongs to, so an
+// upgraded weapon keeps its own shot sound instead of silently falling through to the generic
+// per-dtype default. Anything not listed here (including future towers) still falls back safely.
+const SHOT_VISUAL_ALIAS = {
+  // Rail Sniper (Penetrator path): still the same heavy KINETIC slug, just bigger.
+  railslug: 'slug', railshock: 'slug', railauto: 'slug',
+  // Scatter Pod (Blade Ring / Cluster Shards paths): still the crystal-shard launcher.
+  blade: 'shard', crystal: 'shard', ember: 'flame',
+  // Missile Pod (Heavy Ordnance / Cluster paths): still a homing/lobbed BLAST missile.
+  warhead: 'missile', nova: 'missile', cluster: 'missile', seeker: 'missile', titanbreaker: 'missile',
+  // Tesla Coil (Ball Lightning path, Plasma Orbs+): still the rolling orb projectile.
+  'plasma orb': 'orb',
+};
 function canonicalVisual(e) {
   const v = e && e.visual;
   if (v === 'rail') return 'slug';
   if (KNOWN_SHOT_VISUALS.has(v)) return v;
+  if (SHOT_VISUAL_ALIAS[v]) return SHOT_VISUAL_ALIAS[v];
   return DTYPE_VISUAL[e && e.dtype] || 'bolt';
+}
+
+// Pulse-event sound families (docs/ARCHITECTURE.md section 4 'pulse'), keyed by e.visual the same
+// way the renderer's pulse case switches on it (src/render/renderer.js). 'flame' aliases onto
+// 'fire' because Scatter Pod's Ring of Fire pulse (src/data/towers/scatter.js) reuses that same
+// ignition family. Anything unrecognized (a bare hero pulse with no visual, or a future one) gets
+// a sized generic thump instead of staying silent.
+const PULSE_VISUAL_ALIAS = { flame: 'fire' };
+const PULSE_SOUND_KEYS = new Set(['frost', 'implode', 'surge', 'blackhole', 'radar', 'refinery', 'fire']);
+function pulseVisual(e) {
+  const v = e && e.visual;
+  const aliased = PULSE_VISUAL_ALIAS[v] || v;
+  return PULSE_SOUND_KEYS.has(aliased) ? aliased : 'generic';
 }
 
 const EXPLODE_COLOR = { BLAST: 900, THERMAL: 1500, ENERGY: 2200, CRYO: 2000, KINETIC: 1100, VOID: 2600 };
@@ -85,6 +106,7 @@ export class Audio {
     'shot', 'pop', 'hit', 'blocked', 'explode', 'zap', 'freeze', 'leak', 'cash',
     'waveStart', 'waveCleared', 'titan', 'titanDown', 'place', 'upgrade', 'sell',
     'ability', 'gameOver', 'shieldBreak', 'titanBlink', 'titanSpit', 'heroLevel', 'vault',
+    'pulse', 'crit', 'regrow', 'shieldUp',
   ];
 
   constructor() {
@@ -107,7 +129,7 @@ export class Audio {
     this._noiseBuffer = null;
 
     if (this.available) {
-      requestPlaybackSession();
+      this._syncAudioSession();
       try {
         const Ctor = window.AudioContext || window.webkitAudioContext;
         this.ctx = new Ctor();
@@ -116,7 +138,59 @@ export class Audio {
         this.ctx = null;
         this.available = false;
       }
+      // RP-8: a hidden tab must not keep the music/SFX bus running (or, worse, let a throttled
+      // setInterval catch up on a backlog of past-due notes when it comes back - see
+      // _scheduleMusic). Suspending the AudioContext here freezes ctx.currentTime for the whole
+      // time it is hidden, so every already-scheduled note simply resumes on schedule instead of
+      // firing all at once; _applyRunState() also re-syncs the iOS audio session (TT-18) so a
+      // background tab never holds the non-mixing 'playback' session against the player's own
+      // audio. onEvents()/_allow() already no-op whenever the context is not 'running', so this
+      // alone also satisfies "pause SFX scheduling while hidden".
+      if (this.ctx && typeof document !== 'undefined') {
+        try {
+          document.addEventListener('visibilitychange', () => { this._syncAudioSession(); this._applyRunState(); });
+        } catch { /* ignore */ }
+      }
     }
+  }
+
+  // True while the game actually has something to say: a muted game (both sliders at 0) has
+  // nothing to play, and a hidden tab (RP-8) should not be heard even if it is not muted.
+  get _wantsSound() { return this.sfxVol > 0 || this.musicVol > 0; }
+
+  get _shouldRun() {
+    if (!this.unlocked || !this._wantsSound) return false;
+    try { if (typeof document !== 'undefined' && document.hidden) return false; } catch { /* ignore */ }
+    return true;
+  }
+
+  // Safari 16.4+ Audio Session API: 'playback' lets game audio play when an iPhone or iPad is on
+  // silent or in a Focus mode, but it also silences whatever the player is listening to outside
+  // the game (their own music or a podcast) for as long as it is held. Only claim it while the
+  // game could actually make sound (TT-18); otherwise release it to 'ambient', which mixes with
+  // other audio and is itself silenced by the silent switch, same as a normal muted web page.
+  // No-op on browsers without the API.
+  _syncAudioSession() {
+    try {
+      const s = typeof navigator !== 'undefined' ? navigator.audioSession : null;
+      if (!s) return;
+      const want = this._wantsSound ? 'playback' : 'ambient';
+      if (s.type !== want) s.type = want;
+    } catch { /* ignore */ }
+  }
+
+  // Suspends the AudioContext whenever there is nothing to play (TT-18: both volumes at 0) or
+  // the tab is hidden (RP-8), and resumes it once there is something to play again. Safe to call
+  // any time, including before the context exists. This alone cannot satisfy iOS's "resume must
+  // happen inside a user gesture" rule, so it never runs the unlock trick - unlock() below still
+  // owns that, gated the same way, so a resume is only ever attempted once there is really
+  // something to play.
+  _applyRunState() {
+    if (!this.ctx) return;
+    try {
+      if (this._shouldRun) { if (this.ctx.state !== 'running') this.ctx.resume().catch(() => {}); }
+      else if (this.ctx.state === 'running') { this.ctx.suspend().catch(() => {}); }
+    } catch { /* ignore */ }
   }
 
   _buildGraph() {
@@ -151,18 +225,29 @@ export class Audio {
   // gesture, and the audio session must ask for playback, or the silent switch and Focus modes
   // mute Web Audio completely. The context can also drop to 'interrupted' after an app switch,
   // so callers keep calling this on every gesture until it reports running.
+  //
+  // TT-18: none of that should force audio on a player who has muted both sliders - it would
+  // grab the non-mixing 'playback' session and cut off whatever they are already listening to.
+  // _shouldRun folds in sfx/music/hidden, so a gesture while muted still marks `unlocked` (and
+  // syncs the session to 'ambient') but skips the actual resume; the very next gesture after the
+  // player raises a volume slider back up performs the real resume-inside-gesture unlock, same as
+  // a fresh page load would.
   unlock() {
     if (!this.ctx) return false;
     try {
       this.unlocked = true;
-      requestPlaybackSession();
-      if (this.ctx.state !== 'running') {
-        this.ctx.resume().catch(() => {});
-        const src = this.ctx.createBufferSource();
-        src.buffer = this.ctx.createBuffer(1, 1, this.ctx.sampleRate);
-        src.connect(this.ctx.destination);
-        src.onended = () => { try { src.disconnect(); } catch { /* ignore */ } };
-        src.start(0);
+      this._syncAudioSession();
+      if (this._shouldRun) {
+        if (this.ctx.state !== 'running') {
+          this.ctx.resume().catch(() => {});
+          const src = this.ctx.createBufferSource();
+          src.buffer = this.ctx.createBuffer(1, 1, this.ctx.sampleRate);
+          src.connect(this.ctx.destination);
+          src.onended = () => { try { src.disconnect(); } catch { /* ignore */ } };
+          src.start(0);
+        }
+      } else if (this.ctx.state === 'running') {
+        this.ctx.suspend().catch(() => {});
       }
     } catch { /* ignore */ }
     return this.ready;
@@ -177,6 +262,12 @@ export class Audio {
       this.musicVol = clamp01(music);
       if (this.musicGain) this._rampGain(this.musicGain, this.musicVol);
     }
+    // TT-18: react immediately - release/reclaim the iOS session and suspend/resume the context
+    // the moment both sliders hit 0 (or come back up), without waiting for an unrelated click
+    // elsewhere. If this resume happens to land outside a user gesture, it is a harmless no-op
+    // (caught above); unlock() completes it on the very next touchend/click, as it always did.
+    this._syncAudioSession();
+    this._applyRunState();
   }
 
   _rampGain(node, value) {
@@ -341,6 +432,10 @@ export class Audio {
         case 'sell': this._onSell(e); break;
         case 'ability': this._onAbility(e); break;
         case 'gameOver': this._onGameOver(e); break;
+        case 'pulse': this._onPulse(e); break;
+        case 'crit': this._onCrit(e); break;
+        case 'regrow': this._onRegrow(e); break;
+        case 'shieldUp': this._onShieldUp(e); break;
         // engine extras (docs/ARCHITECTURE.md section 12) mapped onto existing voices
         case 'shieldBreak': this._onFreeze({ r: 260 }); this._onExplode({ r: 120, dtype: 'ENERGY' }); break;
         case 'titanBlink': this._onZap({ points: [0, 0, 0, 0, 0, 0] }); break;
@@ -502,6 +597,83 @@ export class Audio {
     for (const f of [2400, 3000, 3600]) {
       this._tone({ time: t, freq: f, type: 'sine', duration: 0.3, attack: 0.02, decay: 0.15, release: 0.3, gain: g * 0.4 });
     }
+  }
+
+  // Area pulses (docs/ARCHITECTURE.md section 4): the Cryo Emitter's chill, Gravity Well's
+  // implode/surge/black hole, Beacon's radar ping, Mining Rig's refinery chime and Mortar's
+  // ground fire, keyed by e.visual via pulseVisual(). Throttled per sub-type like every other
+  // shot/impact sound so a field of pulse towers can never flood the voice budget.
+  _onPulse(e) {
+    const visual = pulseVisual(e);
+    if (!this._allow('pulse:' + visual)) return;
+    const t = this.ctx.currentTime;
+    const r = clamp(e.r || 60, 20, 420);
+    const size = clamp((r - 20) / 400, 0, 1);
+    switch (visual) {
+      case 'frost': // Cryo Emitter: a cold breathy sweep (the freeze chime layers on top separately)
+        this._noiseBurst({ time: t, duration: 0.13, attack: 0.008, release: 0.15, gain: 0.2, filterType: 'bandpass', filterFreq: 1900, filterFreqEnd: 3200, filterQ: 2.4 });
+        this._tone({ time: t, freq: 650, freqEnd: 1500, type: 'sine', duration: 0.12, attack: 0.01, decay: 0.05, release: 0.12, gain: 0.09 });
+        break;
+      case 'implode': // Gravity Well Crusher: a fast inward pull that snaps shut
+        this._noiseBurst({ time: t, duration: 0.11, attack: 0.08, release: 0.03, gain: 0.28, filterType: 'bandpass', filterFreq: 2400, filterFreqEnd: 200, filterQ: 1.3 });
+        this._tone({ time: t, freq: 900, freqEnd: 80, type: 'sawtooth', duration: 0.09, attack: 0.07, decay: 0.02, release: 0.03, gain: 0.2 });
+        break;
+      case 'surge': // Gravity Well surge: a bright electric crackle across the field
+        this._noiseBurst({ time: t, duration: 0.08, attack: 0.002, release: 0.1, gain: 0.26, filterType: 'highpass', filterFreq: 2800 });
+        this._tone({ time: t, freq: 2000, freqEnd: 3200, type: 'square', duration: 0.05, attack: 0.001, decay: 0.03, release: 0.06, gain: 0.13 });
+        break;
+      case 'blackhole': // Gravity Well: a deep sucking bass drone
+        this._tone({ time: t, freq: 150, freqEnd: 38, type: 'sine', duration: 0.32, attack: 0.02, decay: 0.1, release: 0.3, gain: 0.36 });
+        this._noiseBurst({ time: t, duration: 0.28, attack: 0.05, release: 0.2, gain: 0.14, filterType: 'lowpass', filterFreq: 450, filterFreqEnd: 110 });
+        break;
+      case 'radar': // Beacon: a clean sonar ping
+        this._tone({ time: t, freq: 1600, type: 'sine', duration: 0.15, attack: 0.004, decay: 0.1, release: 0.22, gain: 0.15, filterFreq: 2600 });
+        this._tone({ time: t, freq: 3200, type: 'sine', duration: 0.04, attack: 0.002, decay: 0.03, release: 0.06, gain: 0.05 });
+        break;
+      case 'refinery': // Mining Rig: a soft mechanical processing chime
+        this._tone({ time: t, freq: 900, freqEnd: 1250, type: 'triangle', duration: 0.07, attack: 0.004, decay: 0.05, release: 0.1, gain: 0.13 });
+        this._noiseBurst({ time: t, duration: 0.04, attack: 0.002, release: 0.05, gain: 0.07, filterType: 'bandpass', filterFreq: 3200, filterQ: 2 });
+        break;
+      case 'fire': // Mortar ground fire / Scatter Ring of Fire: an ignition whoosh
+        this._noiseBurst({ time: t, duration: 0.15, attack: 0.01, release: 0.13, gain: 0.22, filterType: 'bandpass', filterFreq: 900, filterFreqEnd: 320, filterQ: 0.8 });
+        break;
+      default: { // hero pulses and anything unrecognized: a generic thump sized by radius
+        const colorFreq = EXPLODE_COLOR[e && e.dtype] || 1400;
+        this._tone({ time: t, freq: 240 - size * 70, freqEnd: 85, type: 'sine', duration: 0.11, attack: 0.005, decay: 0.05, release: 0.14, gain: 0.2 + size * 0.12 });
+        this._noiseBurst({ time: t, duration: 0.1, attack: 0.005, release: 0.1, gain: 0.12, filterType: 'lowpass', filterFreq: colorFreq, filterFreqEnd: 400 });
+      }
+    }
+  }
+
+  // A short bright chime layered on top of the shot/hit sound that fires in the same tick
+  // (src/sim/enemies.js damageEnemy emits 'crit' right alongside the impact's 'hit').
+  _onCrit(e) {
+    if (!this._allow('crit')) return;
+    const t = this.ctx.currentTime;
+    this._tone({ time: t, freq: 2400, freqEnd: 3600, type: 'triangle', duration: 0.045, attack: 0.001, decay: 0.03, release: 0.08, gain: 0.14 });
+    this._tone({ time: t, freq: 4200, type: 'sine', duration: 0.03, attack: 0.001, decay: 0.02, release: 0.05, gain: 0.07 });
+  }
+
+  // A rising two-note chime for a nanite meteor healing back to full (src/sim/enemies.js
+  // REGROW_DELAY), distinct from crit's single bright ping so "something just healed" reads
+  // differently from "that hit landed hard".
+  _onRegrow(e) {
+    if (!this._allow('regrow')) return;
+    const t = this.ctx.currentTime;
+    this._tone({ time: t, freq: 480, freqEnd: 640, type: 'triangle', duration: 0.09, attack: 0.012, decay: 0.05, release: 0.12, gain: 0.13 });
+    this._tone({ time: t + 0.07, freq: 720, freqEnd: 900, type: 'triangle', duration: 0.08, attack: 0.01, decay: 0.04, release: 0.12, gain: 0.11 });
+  }
+
+  // A shield-recharge whoosh for a Storm Titan's Aegis shield fully regenerating
+  // (src/sim/enemies.js AEGIS_REGEN_DELAY): rare and high-stakes, so it gets its own
+  // once-per-few-seconds throttle like the titan cues rather than the default shot-style window.
+  _onShieldUp(e) {
+    if (!this._allow('shieldUp', 3000, 1)) return;
+    const t = this.ctx.currentTime;
+    for (const f of [1200, 1800, 2400]) {
+      this._tone({ time: t, freq: f * 0.6, freqEnd: f, type: 'sine', duration: 0.32, attack: 0.05, decay: 0.15, release: 0.32, gain: 0.13 });
+    }
+    this._noiseBurst({ time: t, duration: 0.28, attack: 0.05, release: 0.24, gain: 0.11, filterType: 'bandpass', filterFreq: 2000, filterFreqEnd: 3200, filterQ: 1.5 });
   }
 
   _onLeak(e) {
@@ -669,6 +841,12 @@ export class Audio {
     const ctx = this.ctx;
     const LOOKAHEAD = 0.25;
     const st = this._musicState;
+    // RP-8 safety net: suspending the context while hidden (see the constructor) already freezes
+    // ctx.currentTime so nothing normally falls behind, but if a throttled setInterval tick still
+    // slips through before the suspend takes effect, snap the cursors forward instead of playing
+    // every note that would have fired during the stall all at once.
+    if (st.nextChordTime < ctx.currentTime - LOOKAHEAD) st.nextChordTime = ctx.currentTime + 0.05;
+    if (st.nextArpTime < ctx.currentTime - LOOKAHEAD) st.nextArpTime = ctx.currentTime + 0.05;
     let guard = 0;
     while (st.nextChordTime < ctx.currentTime + LOOKAHEAD && guard++ < 8) {
       const chord = PAD_PROGRESSION[st.chordIndex % PAD_PROGRESSION.length];

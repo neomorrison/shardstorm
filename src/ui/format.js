@@ -76,7 +76,7 @@ export const DTYPE_INFO = {
   KINETIC: { label: 'Kinetic', color: '#c9d4e6', blurb: 'Bullets, shards and slugs. Cannot hurt Iron or frozen targets.' },
   BLAST:   { label: 'Blast',   color: '#ff9f43', blurb: 'Missiles, bombs and shells. Cannot hurt Magma.' },
   THERMAL: { label: 'Thermal', color: '#ff5e5e', blurb: 'Lasers, fire and burn. Cannot hurt Prism.' },
-  CRYO:    { label: 'Cryo',    color: '#7fdcff', blurb: 'Freeze pulses and cryo shots. Cannot hurt or freeze Comets.' },
+  CRYO:    { label: 'Cryo',    color: '#7fdcff', blurb: 'Freeze pulses and cryo shots. Cannot hurt or freeze Comets and Geodes.' },
   ENERGY:  { label: 'Energy',  color: '#c58bff', blurb: 'Tesla arcs and ball lightning. Cannot hurt Prism.' },
   VOID:    { label: 'Void',    color: '#ff5fd2', blurb: 'Rare, high tier only. Damages everything.' },
 };

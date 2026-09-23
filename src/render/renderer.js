@@ -77,6 +77,11 @@ const ABILITY_FX_COLORS = {
   overcharge: '#ffe28a', orbital: '#9ff4ff', emp: '#8ff0ff', supernova: '#ffffff', rocketbarrage: '#ffb347', punch: '#ff8c2a',
 };
 const TITAN_KINDS = new Set(['maw', 'aegis', 'rift']);
+// RP-10: ship health bars. A ship within this many world units of the core (regardless of HP)
+// still earns a bar, since it is about to leak; everything else needs to be damaged. Once more
+// than SHIP_BAR_MAX non-titan bars would be eligible in one frame, only the most urgent survive.
+const SHIP_BAR_FRONT_DIST = 300;
+const SHIP_BAR_MAX = 40;
 // Manifest keys that differ from the tower id (the art pipeline names the Rail Sniper 'sniper').
 const SPRITE_ALIAS = { rail: 'tower_sniper' };
 const ROUND_HEADS = new Set(['pulse', 'scatter', 'laser', 'cryo', 'mortar', 'vega', 'nova', 'gravity']);
@@ -1973,17 +1978,47 @@ export class Renderer {
       ctx.setLineDash([]);
     }
     ctx.globalAlpha = 1;
-    bars.push({ x, y, R, frac, titan: isTitan, shield: isTitan && e.titan && e.titan.maxShield ? Math.max(0, e.titan.shield / e.titan.maxShield) : 0, alpha });
+    // RP-10: a full-health ship far from the core doesn't need a bar yet, and in a late-wave
+    // swarm (hundreds of ships) drawing one for every single ship buries the channel. Titans
+    // always keep theirs (rare, high-stakes fights); everything else earns one by being damaged
+    // or close enough to the core to warn the player, and fades in with how urgent it is rather
+    // than popping straight to full opacity. _drawBars then caps how many of these it actually
+    // draws, so a huge swarm stays bounded instead of scaling render cost with enemy count.
+    let urgency = 1;
+    if (!isTitan) {
+      const damaged = frac < 0.999;
+      let frontUrgency = 0;
+      if (L && Number.isFinite(e.d)) {
+        const remaining = Math.max(0, L.length - e.d);
+        if (remaining < SHIP_BAR_FRONT_DIST) frontUrgency = 1 - remaining / SHIP_BAR_FRONT_DIST;
+      }
+      const dmgUrgency = damaged ? 1 - frac : 0;
+      urgency = Math.max(dmgUrgency, frontUrgency);
+      if (urgency <= 0) return; // full health, nowhere near the core: no bar needed
+    }
+    const shield = isTitan && e.titan && e.titan.maxShield ? Math.max(0, e.titan.shield / e.titan.maxShield) : 0;
+    bars.push({ x, y, R, frac, titan: isTitan, shield, alpha, urgency });
   }
 
   _drawBars(ctx, bars) {
     if (!bars.length) return;
+    // Titans always draw; everything else is capped to the most urgent SHIP_BAR_MAX so a huge
+    // swarm's worth of bars never buries the map or scales render cost with enemy count (RP-10).
+    let list = bars;
+    const extra = bars.length - bars.reduce((n, b) => n + (b.titan ? 1 : 0), 0);
+    if (extra > SHIP_BAR_MAX) {
+      list = bars.filter((b) => b.titan);
+      const rest = bars.filter((b) => !b.titan).sort((a, b) => b.urgency - a.urgency).slice(0, SHIP_BAR_MAX);
+      list = list.concat(rest);
+    }
     this._world(ctx);
-    for (const b of bars) {
+    for (const b of list) {
       const w = b.titan ? Math.max(120, b.R * 2.2) : Math.max(40, b.R * 1.5);
       const hgt = b.titan ? 9 : 6;
       const x = b.x - w / 2, y = b.y - b.R - (b.titan ? 26 : 16);
-      ctx.globalAlpha = b.alpha;
+      // Fade the bar in with urgency (min 0.45 so a shown bar always stays legible) instead of
+      // popping straight to full opacity the instant a ship crosses the damaged/near-front line.
+      ctx.globalAlpha = b.alpha * (b.titan ? 1 : Math.max(0.45, b.urgency));
       ctx.fillStyle = 'rgba(8,10,18,0.85)';
       roundRectPath(ctx, x - 2, y - 2, w + 4, hgt + 4, 4);
       ctx.fill();

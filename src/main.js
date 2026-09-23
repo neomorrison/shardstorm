@@ -326,27 +326,46 @@ class Game {
     this.heroHotkey = !this.hotkeys.u;
   }
 
-  /** Rows for the Controls list in Settings: [[keys], label]. */
+  /**
+   * Rows for the Controls list in Settings: { keys, label }. `keys` lists alternatives (shown
+   * with "or"); each one is a key, a combo (an array, shown with "+"), a set of keys
+   * ({ list }) or a range ({ from, to }). Touch devices get touch gestures instead.
+   */
   controls() {
+    if (this.isTouch) {
+      const rows = [
+        { keys: ['Tap a card'], label: 'Pick a tower. It appears on the map' },
+        { keys: ['Drag'], label: 'Move the tower before placing it' },
+        { keys: ['Place', 'Cancel'], label: 'Confirm or cancel the placement' },
+        { keys: ['Tap a tower'], label: 'Upgrade, change targeting or sell' },
+        { keys: ['Tap an ability'], label: 'Use it during a wave' },
+        { keys: ['Hold'], label: 'Read what a card, ability or enemy does' },
+        { keys: ['Pinch'], label: 'Zoom the map' },
+        { keys: ['Drag'], label: 'Pan a zoomed map' },
+        { keys: ['Fit map'], label: 'Back to the whole map' },
+      ];
+      if (this.data.HERO_ORDER.length) rows.splice(4, 0, { keys: ['Commander card'], label: 'Deploy or select your Commander' });
+      return rows;
+    }
     const towerKeys = this.data.TOWER_ORDER.map((id) => (this.data.TOWERS[id].hotkey || '').toUpperCase()).filter(Boolean);
     const rows = [];
-    if (towerKeys.length) rows.push([towerKeys, 'Pick a tower to place']);
-    if (this.data.HERO_ORDER.length && this.heroHotkey) rows.push([['U'], 'Deploy or select your commander']);
+    if (towerKeys.length) rows.push({ keys: [{ list: towerKeys }], label: 'Pick a tower to place' });
+    if (this.data.HERO_ORDER.length && this.heroHotkey) rows.push({ keys: ['U'], label: 'Deploy or select your Commander' });
     rows.push(
-      [['Click'], 'Place, or select a tower'],
-      [['Shift', 'Click'], 'Place and keep placing'],
-      [['Right click', 'Esc'], 'Cancel or deselect'],
-      [[',', '.', '/'], 'Upgrade path A, B, C'],
-      [['Tab'], 'Cycle targeting'],
-      [['Delete'], 'Sell (press twice)'],
-      [['Space'], 'Launch wave, or send the next one early'],
-      [[this.speedKey.toUpperCase()], 'Cycle game speed'],
-      [['P', 'Esc'], 'Pause'],
-      [['1', '9'], 'Abilities'],
-      [['Hold Shift'], 'Show every tower range'],
-      [this.isTouch ? ['Pinch', 'Drag'] : ['Wheel', '+', '-'], this.isTouch ? 'Zoom and pan the map' : 'Zoom the map'],
-      [['Drag'], 'Pan a zoomed map (or middle drag)'],
-      [['0'], 'Fit the whole map'],
+      { keys: ['Click'], label: 'Place, or select a tower' },
+      { keys: [['Shift', 'Click']], label: 'Place and keep placing' },
+      { keys: ['Right click', 'Esc'], label: 'Cancel or deselect' },
+      { keys: [{ list: [',', '.', '/'] }], label: 'Upgrade path A, B, C' },
+      { keys: ['Tab'], label: 'Cycle targeting' },
+      { keys: ['Delete'], label: 'Sell (press twice)' },
+      { keys: ['Space'], label: 'Launch wave, or send the next one early' },
+      { keys: [this.speedKey.toUpperCase()], label: 'Cycle game speed' },
+      { keys: ['P', 'Esc'], label: 'Pause' },
+      { keys: [{ from: '1', to: '9' }], label: 'Use an ability' },
+      { keys: ['Hold Shift'], label: 'Show every tower range' },
+      { keys: ['Wheel', { list: ['+', '-'] }], label: 'Zoom the map' },
+      { keys: ['Drag', 'Middle drag'], label: 'Pan a zoomed map' },
+      { keys: ['0'], label: 'Fit the whole map' },
     );
     return rows;
   }
@@ -385,15 +404,17 @@ class Game {
       const short = this.layout === 'compact' && window.innerWidth > window.innerHeight && window.innerHeight < 560;
       this.app.classList.toggle('is-short', short);
       this.ui?._hideTip();
+      this.ui?._layoutChanged();
+      this._renderDirty = true;
       this._queueInsets();
     };
     apply();
-    // The ability bar and the stage change size independently of the window.
+    // The stage changes size with the drawer, the command strip and rotation. A frozen frame
+    // (pause, game over) has to be redrawn when it does.
     if (typeof ResizeObserver !== 'undefined') {
       try {
-        const ro = new ResizeObserver(() => this._queueInsets());
+        const ro = new ResizeObserver(() => { this._renderDirty = true; this._queueInsets(); this.ui?._fitMini(); });
         ro.observe(this.canvas);
-        if (this.ui?.$abilities) ro.observe(this.ui.$abilities);
       } catch { /* ignore */ }
     }
     try { q.addEventListener('change', apply); } catch { /* old browsers */ }
@@ -408,6 +429,7 @@ class Game {
     this.isTouch = on;
     this.app.classList.toggle('is-touch', on);
     this.ui?._updateTouchControls();
+    this.ui?._renderCoach();
   }
 
   _watchLifecycle() {
@@ -418,21 +440,23 @@ class Game {
           if (!this.paused) this.pause();
         }
         this.flushTotals();
+        this._persistMeta();
       }
     });
-    window.addEventListener('pagehide', () => { this.saveNow(); this.flushTotals(); });
+    window.addEventListener('pagehide', () => { this.saveNow(); this.flushTotals(); this._persistMeta(); });
   }
 
   // iPad and iPhone Safari ignore user-scalable=no, so a stray double tap or pinch on the HUD
-  // zoomed the whole page with no easy way back. CSS touch-action handles double tap; these
-  // listeners stop Safari's pinch gestures. The playfield keeps its own zoom (src/ui/input.js),
-  // which runs on pointer events and is unaffected.
+  // zoomed the whole page with no easy way back. CSS touch-action (pan-x pan-y on the page,
+  // none on the playfield) rules out double-tap and pinch zoom while panels still scroll; these
+  // listeners stop Safari's own pinch gestures. There is deliberately no touchmove listener: a
+  // non-passive one makes every panel scroll wait for the main thread. The playfield keeps its
+  // own zoom (src/ui/input.js), which runs on pointer events and is unaffected.
   _lockPageZoom() {
     const block = (e) => { if (e.cancelable) e.preventDefault(); };
     for (const type of ['gesturestart', 'gesturechange', 'gestureend']) {
       document.addEventListener(type, block, { passive: false });
     }
-    document.addEventListener('touchmove', (e) => { if (e.touches && e.touches.length > 1) block(e); }, { passive: false });
     document.addEventListener('dblclick', block, { passive: false });
   }
 
@@ -528,28 +552,17 @@ class Game {
   }
 
   /**
-   * Keep the world clear of overlays that sit on the canvas for good (the ability bar). The
-   * world only shifts into free letterbox space, it never shrinks, so the map keeps its size;
-   * when zoomed in, the same insets let the player pan the world edge out from under the bar.
+   * Insets for UI that overlays the canvas for good. Nothing does any more: the ability bar and
+   * the touch Place / Cancel controls live in the command strip (#cmd), a grid row (a side
+   * column on phones held sideways) reserved for the whole run, so the canvas never extends
+   * under them and the world cannot be covered at any zoom, with any number of abilities. The
+   * renderer re-measures the canvas whenever the strip, the drawer or the window resizes it.
+   * This stays the one place to add an inset if a permanent overlay ever returns.
    */
   _updateInsets() {
     const r = this.renderer;
     if (!r?.setInsets) return;
-    const ins = { top: 0, right: 0, bottom: 0, left: 0 };
-    const bar = this.inGame ? this.ui?.$abilities : null;
-    if (bar && bar.childElementCount && bar.offsetParent !== null) {
-      const st = this.canvas.getBoundingClientRect();
-      const br = bar.getBoundingClientRect();
-      if (st.width > 0 && st.height > 0 && br.width > 0) {
-        const fit = Math.min(st.width / 1500, st.height / 1000);
-        const freeV = st.height - 1000 * fit, freeH = st.width - 1500 * fit;
-        const coverB = Math.max(0, st.bottom - br.top + 6);
-        const coverR = Math.max(0, st.right - br.left + 6);
-        if (freeV >= freeH) ins.bottom = Math.floor(Math.min(coverB, freeV));
-        else ins.right = Math.floor(Math.min(coverR, freeH));
-      }
-    }
-    r.setInsets(ins);
+    r.setInsets({ top: 0, right: 0, bottom: 0, left: 0 });
   }
 
   /** CSS px per world unit. */
@@ -601,7 +614,7 @@ class Game {
       return false;
     }
     if (this.sim) this._leaveGame();
-    this._enter(sim);
+    this._enter(sim, save.meta || {});
     if (save.meta?.debug) this.run.debug = true;
     return true;
   }
@@ -613,7 +626,12 @@ class Game {
     this.startNew(cfg);
   }
 
-  _enter(sim) {
+  /**
+   * Starts playing a sim. `meta` is the saved run's meta when continuing: it carries the run's
+   * play time and what the lifetime totals already counted, so a Continue that replays waves
+   * lost since the last save (quit mid-wave, early-sent chains) never counts them twice.
+   */
+  _enter(sim, meta = {}) {
     const s = sim.state;
     this.sim = sim;
     this.over = false;
@@ -621,18 +639,26 @@ class Game {
     this.speed = 1;
     this.acc = 0;
     this.slowMo = 0;
+    this._renderDirty = true;
     const startBest = storage.bestWave(s.mapId, s.difficulty);
+    const num = (v) => (Number.isFinite(v) && v > 0 ? v : 0);
+    const time = num(meta.time);
+    const fl = meta.flushed || {};
+    const ct = meta.counted || {};
     this.run = {
       config: { mapId: s.mapId, difficulty: s.difficulty, heroId: s.heroId || null },
       startBest,
       best: Math.max(startBest, s.cleared || 0),
-      time: 0,
-      flushed: { pops: s.stats?.pops || 0, time: 0, titans: 0, leaks: s.stats?.leaks || 0 },
+      time,
+      flushed: { pops: Math.max(s.stats?.pops || 0, num(fl.pops)), time, titans: 0, leaks: Math.max(s.stats?.leaks || 0, num(fl.leaks)) },
+      counted: { cleared: Math.max(s.cleared || 0, num(ct.cleared)), titanWave: num(ct.titanWave) },
       titans: 0,
       pendingSave: false,
       lastSaveCleared: s.cleared || 0,
     };
-    try { sim.setAutoStart(!!this.settings.autoStart); } catch { /* ignore */ }
+    // Pass the setting on only when it differs from the sim's own flag, so entering a run never
+    // arms an auto launch by itself (auto-start follows a cleared wave, docs/DESIGN.md 2).
+    try { if (!!s.autoStart !== !!this.settings.autoStart) sim.setAutoStart(!!this.settings.autoStart); } catch { /* ignore */ }
     this.updateSettings({ lastMap: s.mapId, lastDifficulty: s.difficulty });
     this.inGame = true;
     this.gameEl.hidden = false;
@@ -661,6 +687,7 @@ class Game {
   quitToTitle(next = 'title') {
     if (this.sim && !this.over) this.saveNow();
     this.flushTotals();
+    this._persistMeta();
     this._leaveGame();
     this.screens.show('title', {}, { reset: true });
     if (next === 'maps') this.screens.show('maps');
@@ -678,6 +705,7 @@ class Game {
         mapId: s.mapId, difficulty: s.difficulty, heroId: s.heroId || null,
         wave: s.wave, cleared: s.cleared, lives: s.lives, cash: Math.floor(s.cash),
         debug: !!this.run.debug,
+        ...this._metaExtra(),
       });
       this.run.pendingSave = false;
       this.run.lastSaveCleared = s.cleared;
@@ -686,6 +714,34 @@ class Game {
       console.warn('[shardstorm] autosave failed', err);
       return false;
     }
+  }
+
+  /** Run bookkeeping stored beside the save: play time and what the lifetime totals counted. */
+  _metaExtra() {
+    const run = this.run;
+    if (!run) return {};
+    return {
+      time: Math.round(run.time * 10) / 10,
+      flushed: { pops: run.flushed.pops, leaks: run.flushed.leaks },
+      counted: { cleared: run.counted.cleared, titanWave: run.counted.titanWave },
+    };
+  }
+
+  /**
+   * Refreshes that bookkeeping in the saved run without touching the save itself. Mid-wave the
+   * sim can only serialize its snapshot from before the wave, so the save stays there; the meta
+   * still records the time played and the waves and shells the lifetime totals already hold.
+   */
+  _persistMeta() {
+    if (!this.sim || !this.run || this.over) return;
+    try { storage.patchRunMeta(this._metaExtra()); } catch { /* ignore */ }
+  }
+
+  /** Waves cleared since the last save; quitting now would replay them. */
+  unsavedWaves() {
+    const s = this.sim?.state;
+    if (!s || this.over || s.phase === 'build') return 0;
+    return Math.max(0, (s.cleared || 0) - (this.run?.lastSaveCleared || 0));
   }
 
   /** Adds lifetime totals accumulated since the last flush. */
@@ -705,12 +761,16 @@ class Game {
   _onWaveCleared(ev) {
     const sim = this.sim;
     const s = sim.state;
-    storage.addTotals({ waves: 1 });
+    const cleared = s.cleared || 0;
+    if (cleared > this.run.counted.cleared) {
+      storage.addTotals({ waves: cleared - this.run.counted.cleared });
+      this.run.counted.cleared = cleared;
+    }
     this.flushTotals();
     if (!this.run.debug) storage.submitBest(s.mapId, s.difficulty, s.cleared);
     this.run.best = Math.max(this.run.best, s.cleared || 0);
     this.run.pendingSave = true;
-    this.saveNow();
+    if (!this.saveNow()) this._persistMeta();
   }
 
   _gameOver() {
@@ -724,6 +784,7 @@ class Game {
     this.flushTotals();
     if (!this.run.debug) storage.submitBest(s.mapId, s.difficulty, s.cleared);
     const best = storage.bestWave(s.mapId, s.difficulty);
+    // The score is the highest wave fully cleared (docs/DESIGN.md 2); `wave` is where it fell.
     const p = {
       mapId: s.mapId, difficulty: s.difficulty,
       wave: s.wave, cleared: s.cleared || 0, best,
@@ -836,7 +897,13 @@ class Game {
     }
     this.lastSteps = steps;
     this._route(sim.drainEvents());
-    if (this.renderer) this.renderer.render(sim, this.paused ? 0 : dt, this.ui.state);
+    // Paused, or the game over screen is up: nothing moves, so keep the last frame instead of
+    // redrawing the whole field behind the modal. Redraw once when the canvas changes size.
+    const frozen = this.paused || (this.over && this.screens.current === 'gameover');
+    if (this.renderer && (!frozen || this._renderDirty)) {
+      this._renderDirty = false;
+      this.renderer.render(sim, frozen ? 0 : dt, this.ui.state);
+    }
     this.ui.update(sim, dt);
     if (sim.state.phase === 'over' && !this.over) this._gameOver();
     if ((this._frameN & 15) === 0) this._music(sim);
@@ -851,7 +918,12 @@ class Game {
     for (let i = 0; i < ev.length; i++) {
       const e = ev[i];
       if (e.t === 'waveCleared') this._onWaveCleared(e);
-      else if (e.t === 'titanDown') { this.run.titans++; this.slowMo = SLOWMO_TIME; }
+      else if (e.t === 'titanDown') {
+        this.slowMo = SLOWMO_TIME;
+        // count each Titan wave once, even when a Continue replays it
+        const w = Number(e.wave) || (this.sim?.state?.wave ?? 0);
+        if (w > this.run.counted.titanWave) { this.run.counted.titanWave = w; this.run.titans++; }
+      }
       else if (e.t === 'gameOver') this._gameOver();
     }
   }
