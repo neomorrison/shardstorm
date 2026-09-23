@@ -20,7 +20,7 @@ Hand-built in `src/data/waves.js`. Each wave is within 20% of `budget(w)` and ru
 |---|---|---|
 | 3 / 5 / 9 / 12 | cobalt, jade, amber, rose | a short group behind a familiar stream |
 | 14 | phantom | 8 phantom Cobalt at the end of the wave (cheap to leak, easy to notice) |
-| 16 | iron | 4 Iron Meteors, 2 s apart |
+| 16 | iron | 2 Iron Meteors, 4 s apart (22 Integrity if an all-KINETIC defense leaks both); one on 17, two on 18 and 19, more from 20 |
 | 18 | magma, comet | 6 of each, one per lane |
 | 20 | Storm Titan (Maw) | a normal wave, Titan enters at 5 s |
 | 22 | prism, nanite | 6 Prism, 12 nanite Rose |
@@ -49,7 +49,7 @@ Themes rotate in shuffled blocks of seven: each theme once per block, never the 
 
 Outside forced ones, modifiers are rolled per group with chances that ramp with `w`: Phantom 10% at wave 41 rising to 50% by wave 140, Nanite 8% to 50% by 145, Plated 8% to 60% by 144 (Plated is rolled only on Iron, Obsidian and ships, where it matters). Ships never carry Phantom or Nanite (the Specter is phantom by nature).
 
-New ship classes debut as one featured hull on their unlock wave: **Heavy Company** (50: a Warbarge and a Specter), **Dreadnought Rising** (70), **Worldbreaker** (90). The rest of the wave fits around it.
+New ship classes debut as one featured hull on their unlock wave: **Heavy Company** (50: a Warbarge and a Specter scout, an empty 80 HP hull flagged with the `scout` modifier so a first leak costs 80 Integrity instead of 816), **Dreadnought Rising** (70), **Worldbreaker** (90). The rest of the wave fits around it.
 
 ### 3.2 How a wave is filled
 Each theme is a list of components. A component has a share of the budget, a **ladder** of types from weak to strong (for example Hauler, Warbarge, Dreadnought, Worldbreaker), a count ceiling and a spawn pattern. The ceilings of every theme add up to exactly 300, the spawn cap.
@@ -59,7 +59,7 @@ Each theme is a list of components. A component has a share of the budget, a **l
 3. **Counts.** Components are realized largest unit first. Ships make change down their ladder (4 Dreadnoughts and 3 Warbarges rather than a rounded 5 Dreadnoughts) and each remainder carries to the next, finer component, so total mass lands within about 1% of budget (5% is the hard limit).
 4. **Hull multiplier.** Only when every component is at its ceiling on its strongest rung, which means the wave has hit the 300-spawn cap, does the leftover go into `H`, applied to every ship hull in the wave (children included). Mass is linear in `H`, so it is solved exactly: `H = (B - meteorMass) / hullMass`. Every theme saturates at about 1.64M hull HP, so `H` follows the budget trend instead of jumping with the theme.
 
-Results: `H` stays 1 until wave 128, is about 35 at wave 150 and about 3 x 10^5 at wave 200. The storm always wins.
+Results (with the surge of docs/ECONOMY.md 4.1): `H` stays 1 until wave 96, is about 3 at wave 100, 80 at wave 110, 3,700 at wave 120 and 10^10 at wave 150. The storm always wins.
 
 ### 3.3 Timing and lanes
 Spawn duration is exactly `D(w)`, capped at 45 s. Patterns: **stream** (even spacing across a window), **burst** (clusters of about 12, 0.08 to 0.12 s apart), **pulse** (packs of about 4, 0.3 to 0.45 s apart), **convoy** (evenly spaced hulls). Windows are fractions of `D(w)` with a small jitter; afterwards the whole wave is stretched so its last spawn lands exactly on `D(w)`. Enemy speed is multiplied by `speedRamp(w)`.

@@ -73,15 +73,15 @@ Ships rotate along the path, show a health bar, cannot be frozen solid (slows at
 | hauler | Hauler | 1.0 | 200 | 4 obsidian | 616 |
 | warbarge | Warbarge | 0.25 | 700 | 4 hauler | 3164 |
 | dreadnought | Dreadnought | 0.18 | 4000 | 4 warbarge | 16656 |
-| specter | Specter | 2.75 | 400 | 4 obsidian (phantom, nanite) | 816 |
+| specter | Specter | 2.2 | 400 | 4 obsidian (phantom, nanite) | 816 |
 | worldbreaker | Worldbreaker | 0.18 | 20000 | 2 dreadnought + 3 specter | 55760 |
 
-Specter: Phantom, immune to KINETIC and BLAST.
+Specter: Phantom, immune to KINETIC and BLAST. Its first appearance (wave 50) is a **scout**: an empty hold and a fifth of the hull (80 HP), so a first leak costs 80 Integrity and teaches the counter (docs/ECONOMY.md 4.8).
 
 ### Storm Titans (boss waves)
-Every 20th wave (20, 40, 60, ...) includes a **Storm Titan**: a unique ship with a big health bar at the top of the screen, a name banner, and one special trait. Titan tier = wave / 20. Hull HP = `0.7 x sqrt(tier) x B(w)` (docs/ECONOMY.md 4.6: about 410 at wave 20, 2.8k at 40, 12.8k at 60), speed 0.2. Leaking a Titan ends the game. Types rotate:
+Every 20th wave (20, 40, 60, ...) includes a **Storm Titan**: a unique ship with a big health bar at the top of the screen, a name banner, and one special trait. Titan tier = wave / 20. Hull HP = `0.7 x sqrt(tier) x B(w)`, rising with only the square root of the late surge (docs/ECONOMY.md 4.6: about 410 at wave 20, 2.8k at 40, 12.8k at 60, 73k at 80, 1.3M at 100), speed 0.2. Leaking a Titan ends the game. Types rotate:
 - **Maw** (wave 20, 80, 140...): periodically spits meteors behind itself (grade scales with tier).
-- **Aegis** (wave 40, 100, 160...): a regenerating shield (25% of hull) that only non-KINETIC damage breaks; shield restores after 8 s without damage.
+- **Aegis** (wave 40, 100, 160...): a regenerating shield (25% of hull); KINETIC hits deal only 20% of their damage to it, other types full damage; the shield restores after 8 s without being hit.
 - **Rift** (wave 60, 120, 180...): at 75/50/25% hull it blinks 250 units forward along the path and briefly emits a pulse that stuns towers within 150 units for 1.5 s.
 
 ## 5. Towers
@@ -97,7 +97,7 @@ Hotkeys in brackets. Base costs are for the Pilot (normal) difficulty.
 | 1 | **Pulse Turret** | Q | 200 | cheap single target | KINETIC | Penetrator (pierce; T5 Starlance) | Cyclone (fire rate; T5 Hurricane Array, ability) | Marksman (range, crits, detection; T5 Deadeye Prime) |
 | 2 | **Scatter Pod** | W | 280 | short range radial shards | KINETIC | Blade Ring (more shards, rate; T5 Maelstrom) | Thermal Core (converts to THERMAL fire ring, burn; T5 Solar Flare) | Cluster Shards (splitting shards, range; T5 Shatterstorm) |
 | 3 | **Rail Sniper** | E | 350 | global range hitscan | KINETIC | Penetrator (damage; T2 hits Iron; T5 Planet Cracker) | Suppression (shrapnel, boss stun, brittle; T5 Warden) | Logistics (fire rate; T4 supply drops of credits; T5 Quartermaster) |
-| 4 | **Missile Pod** | R | 500 | splash | BLAST | Heavy Ordnance (radius, damage; T5 Nova Warhead) | Cluster (sub-munitions; T5 Carpet Barrage) | Hunter-Killer (homing, ship damage; T5 Titan Breaker) |
+| 4 | **Missile Pod** | R | 460 | splash | BLAST | Heavy Ordnance (radius, damage; T5 Nova Warhead) | Cluster (sub-munitions; T5 Carpet Barrage) | Hunter-Killer (homing, ship damage; T5 Titan Breaker) |
 | 5 | **Cryo Emitter** | T | 450 | freeze pulse aura | CRYO | Deep Freeze (freeze duration, radius; T5 Absolute Zero, ability) | Embrittle (frozen take extra damage, shatter; T5 Glass Storm) | Cryo Lance (targeted cryo bolts, ship slows; T5 Frost Titan) |
 | 6 | **Tesla Coil** | Y | 600 | chain lightning | ENERGY | Chain (more jumps; T5 Storm Crown) | Ball Lightning (slow piercing orbs; T5 Plasma Tempest) | Overload (heavy single zaps, ship stun; T5 Zeus Array) |
 | 7 | **Laser Array** | A | 1100 | continuous beam that ramps on one target | THERMAL | Prism Split (beam forks to more targets; T5 Rainbow Lattice) | Focus (ramp speed and cap; T5 Sunspear) | Plasma (T3 switches to VOID; T5 Singularity Lance) |

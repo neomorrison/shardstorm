@@ -7,17 +7,32 @@ export function discountable(type, def) {
   return NO_DISCOUNT.indexOf(type) < 0 && !(def && def.hero);
 }
 
-// Best Beacon discount covering (x, y) for a purchase of `type` (never Rigs/Beacons/Commanders).
-export function discountAt(sim, type, x, y, def) {
-  if (!discountable(type, def)) return 0;
-  let best = 0;
+// Beacon giving the best discount at (x, y) for a purchase of `type` (never Rigs/Beacons/
+// Commanders), or null.
+export function discountSource(sim, type, x, y, def) {
+  if (!discountable(type, def)) return null;
+  let best = 0, src = null;
   for (const t of sim.state.towers) {
     const au = t.baseStats && t.baseStats.aura;
     if (!au || !au.discount) continue;
     const dx = t.x - x, dy = t.y - y, r = au.radius || 0;
-    if (dx * dx + dy * dy <= r * r && au.discount > best) best = au.discount;
+    if (dx * dx + dy * dy <= r * r && au.discount > best) { best = au.discount; src = t; }
   }
-  return Math.min(best, 0.5);
+  return src;
+}
+
+// Best Beacon discount covering (x, y) for a purchase of `type` (never Rigs/Beacons/Commanders).
+export function discountAt(sim, type, x, y, def) {
+  const src = discountSource(sim, type, x, y, def);
+  return src ? Math.min(src.baseStats.aura.discount, 0.5) : 0;
+}
+
+// A discounted purchase spends the Beacon's undo refund: once its discount has been used, the
+// Beacon sells for 70% like any tower bought before the last wave. Without this, a Beacon placed
+// and undone in the same build phase would hand out its discount for free (docs/BALANCE.md).
+export function consumeDiscount(sim, type, x, y, def) {
+  const src = discountSource(sim, type, x, y, def);
+  if (src && src.undoPaid > 0) { src.undoPaid = 0; src.undoable = false; }
 }
 
 export function applyDiscount(price, disc) {
@@ -67,7 +82,9 @@ export function payWaveIncome(sim, w) {
     if (inc.vault) {
       const cap = inc.vault.cap || 0, rate = inc.vault.rate || 0;
       let v = t.data.vault || 0;
-      const interest = Math.min(v, cap) * rate;
+      // interest is scaled by c(w) like ore (ECONOMY 1.3), so vault income is bounded by
+      // rate x cap x c(w) per wave and falls with the storm after wave C_START
+      const interest = Math.min(v, cap) * rate * f;
       v += amt + interest;
       let over = 0;
       if (v > cap) { over = v - cap; payout(sim, t, over, 'rig'); v = cap; }

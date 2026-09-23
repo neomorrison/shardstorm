@@ -62,7 +62,7 @@ const padR = (s, n) => String(s).padEnd(n);
 function laneShares(spec) {
   const lm = [0, 0];
   for (const g of spec.groups) {
-    const u = familyMass(g.type, spec.hullMult, g.mods.plated);
+    const u = familyMass(g.type, spec.hullMult, g.mods.plated, !!g.mods.scout);
     if (g.lane === -1) { lm[0] += Math.ceil(g.count / 2) * u; lm[1] += Math.floor(g.count / 2) * u; }
     else lm[g.lane] += g.count * u;
   }
@@ -71,7 +71,7 @@ function laneShares(spec) {
 }
 function topTypes(spec) {
   const m = new Map();
-  for (const g of spec.groups) m.set(g.type, (m.get(g.type) || 0) + g.count * familyMass(g.type, spec.hullMult, g.mods.plated));
+  for (const g of spec.groups) m.set(g.type, (m.get(g.type) || 0) + g.count * familyMass(g.type, spec.hullMult, g.mods.plated, !!g.mods.scout));
   return [...m.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3)
     .map(([t, v]) => `${t}${Math.round((100 * v) / spec.mass)}%`).join(' ');
 }
@@ -154,7 +154,7 @@ for (let w = 1; w <= LAST; w++) {
 
   // two-lane pressure (a single hull that outweighs the rest of the wave cannot be split)
   const ls = laneShares(s);
-  const biggest = Math.max(...s.groups.map((g) => familyMass(g.type, s.hullMult, g.mods.plated))) / s.mass;
+  const biggest = Math.max(...s.groups.map((g) => familyMass(g.type, s.hullMult, g.mods.plated, !!g.mods.scout))) / s.mass;
   if (Math.min(ls[0], ls[1]) < 0.25 && biggest < 0.5) fail(w, `lane split ${ls.map((x) => x.toFixed(2)).join('/')} leaves a lane idle`);
   if (Math.min(ls[0], ls[1]) < 0.9 * (1 - biggest) * 0.5 && biggest >= 0.5) fail(w, `lane split ${ls.map((x) => x.toFixed(2)).join('/')} does not offset the big hull`);
 

@@ -105,6 +105,11 @@ among the tower's *primary* scenarios (the table below, hardcoded from ECONOMY.m
 don't run any of a tower's primary scenarios (e.g. `--scenario SHIP` for Pulse, whose primary is
 SWARM) show `INFO`, not a verdict, since nothing was actually measured against the target.
 
+**Global range.** A tower with `range: Infinity` (the Rail Sniper) is graded on SHIP against
+`GLOBAL_SHIP_FACTOR x target` (0.7, `src/data/economy.js`): it applies its ship damage over the
+whole channel, 8 to 10 times the stretch a bench tower covers. The printed eta is normalised
+back to the plain target (the SHIP value divided by 0.7) and the grade reads `SHIP/global`.
+
 | Tower | Primary | Secondary |
 |---|---|---|
 | Pulse Turret | SWARM | SHIP |
@@ -199,34 +204,32 @@ All three currently pass.
 
 ## 7. Latest results
 
-Full default run after the content phase (every tower real, no stubs), official windows,
-regenerated with `node tools/bench.mjs --json out/bench.json`. **Balance is not final**: this is
-the input to the balance pass, not its verdict. Counts are over the 25 default configs.
+Full default run after the tower tuning and the macro balance pass, official windows, regenerated
+with `node tools/bench.mjs --json out/balance/bench.json`. Counts are over the 25 default configs.
+`tools/balance.mjs` section 4 grades the same rows (and the utility, support and income contracts)
+and fails on any HIGH; docs/BALANCE.md 3.5 charts efficiency by tier.
 
-| Tower | PASS | LOW | HIGH | Best config (eta vs target) | Notes |
+| Tower | PASS | LOW | HIGH | Best config (eta vs target, graded on) | Notes |
 |---|---|---|---|---|---|
-| Pulse Turret | 11 | 14 | 0 | 2-5-0: 20.0 vs 25 | Cyclone path passes at every tier; Penetrator and Marksman T4/T5 read low on SWARM (Marksman is a SHIP tower: 0-2-5 SHIP about 1810 mass/s) |
-| Scatter Pod | 10 | 15 | 0 | 4-0-0: 17.3 vs 16 | Blade Ring through T4 passes; every T5 reads low (Maelstrom 14, Shatterstorm 9, Solar Flare 4 on SWARM; Solar Flare is about 570 on SHIP) |
-| Rail Sniper | 13 | 12 | 0 | 5-0-2: 33.4 vs 25 | Penetrator passes at every tier except T2, Logistics through T3; Suppression (stuns, brittle) reads low because no single-tower metric sees team-wide brittle |
-| Missile Pod | 5 | 20 | 0 | 0-2-0: 11.6 vs 11.2 | Every T3+ config is low on its SWARM/DENSE primaries; Hunter-Killer is a SHIP tower (0-0-5 SHIP about 1070) |
-| Tesla Coil | 14 | 10 | 1 | 2-5-0: 31.6 vs 25 | Ball Lightning passes at every tier; 0-0-1 reads high (15.3 vs 10.5); Overload T5 reads low on SWARM (it is single target) |
-| Laser Array | 14 | 11 | 0 | 0-5-2: 26.5 vs 25 | Focus passes at T1 and T3 to T5; Plasma T4 and Prism Split T4/T5 read low |
-| Drone Bay | 8 | 17 | 0 | 5-0-0: 18.7 vs 25 | Swarm passes; Bomber and Tractor read low (the tractor's value is delay, not kills) |
-| Orbital Mortar | 5 | 20 | 0 | 0-2-0: 13.6 vs 11.2 | Now measured under its aim point; T1-T2 pass, every T3+ reads low |
-| Cryo Emitter | 3 | 22 | 0 | 0-0-3: etaGain 9.2 | Leaks through the corridor fall from 1965 to 10-25 with Frost Titan or Glass Storm and to 232 with Absolute Zero; the gain metric undervalues freezes |
-| Gravity Well | 2 | 23 | 0 | 3-0-0: etaGain 8.5 | Crusher T5 adds 180 mass/s; Undertow T5 and Rewind crosspaths cut leaks from 1965 to 0 but read no MDS gain (delay effect) |
-| Mining Rig | 12 PASS | 13 WATCH | | P 9.3 (5-0-0) to 50 (0-3-0) | Deep Drill passes everywhere; Vault and Refinery combos read WATCH by the simple formula (see section 4 and `out/rig-econ.mjs`) |
-| Command Beacon | 0 | 25 | 0 | 0-0-0: etaGain 5.0 vs 10 | Base aura adds about 25% to four Pulse 2-0-0 (18.1 to 22.6 mass/s); Overclock T5 adds +70 mass/s. Under ECONOMY 3.3's "pays for itself on about 4 equal towers" at every tier |
+| Pulse Turret | 24 | 1 | 0 | 5-2-0: 30.4 vs 25 (DENSE) | 0-0-2 (7.0 vs 7.3 floor) is the detection step of Marksman; Marksman T3+ is graded on SHIP, Starlance on DENSE |
+| Scatter Pod | 25 | 0 | 0 | 5-0-0: 30.8 vs 25 (SWARM) | Solar Flare graded on SHIP |
+| Rail Sniper | 25 | 0 | 0 | 5-0-2: 33.4 vs 25 (SHIP, global) | SHIP graded at 0.7 x target for global range (section 3); a ship hull stops a penetrating slug in real waves |
+| Missile Pod | 24 | 1 | 0 | 0-2-0: 13.5 vs 11.2 (DENSE) | 5-0-2 reads 16.0 on SWARM4X (0.64); Hunter-Killer graded on SHIP |
+| Tesla Coil | 25 | 0 | 0 | 0-2-5: 33.3 vs 25 (SHIP) | Overload graded on SHIP |
+| Laser Array | 25 | 0 | 0 | 0-0-2: 13.4 vs 11.2 (DENSE) | |
+| Drone Bay | 22 | 3 | 0 | 2-5-0: 33.0 vs 25 (SHIP) | Tractor 0-0-2 (detection) and the Gravity Hauler T5 (control, 0.58x) read low |
+| Orbital Mortar | 22 | 3 | 0 | 0-2-0: 14.3 vs 11.2 (SWARM) | Firestorm 0-5-0 / 2-5-0 and 0-2-5 read 0.55 to 0.64 on SWARM4X; Doomsday deals 200 to ships (was 230, 5-0-2 read HIGH on SHIP) |
+| Cryo Emitter | utility | | | leaks through the corridor fall from 1965 to 10 to 25 with Frost Titan or Glass Storm | graded on leak and MDS gain by `tools/balance.mjs` (25/25 protect the corridor) |
+| Gravity Well | utility | | | Crusher T5 and Rewind crosspaths cut leaks to near 0 | graded as above (25/25) |
+| Mining Rig | 12 PASS | 13 WATCH | | P 9.3 to 50 | every combo pays back in 8 waves or more (the hard floor) |
+| Command Beacon | support | | | base aura +20% attack speed | `etaGain` reads low by construction (four cheap Pulse 2-0-0s); on four covered towers of its own value every config pays for itself (`tools/balance.mjs`, 25/25) |
 
-What the balance pass should read from this, in order: Missile Pod and Orbital Mortar T3+ are
-the clearest under-tuned damage lines; every T5 except Pulse Cyclone, Rail Penetrator,
-Tesla Ball Lightning and Laser Focus reads below the 2.5x target; Command Beacon under-delivers at
-every tier on a saturated stream; utility towers should be judged on the leak columns
-(`leakedAlone` / `leakedWith` in the JSON) rather than `etaGain`.
+Damage towers: 192 of 200 default configs pass, none HIGH. Efficiency rises with tier on every
+damage tower (docs/BALANCE.md, efficiency chart).
 
 The headless bots (`tools/headless.mjs`) measure every configuration in a similar arena (seven
 categories: SWARM, DENSE, SHIP, IRON, SPECIAL, PHANTOM, SPECTER) and build real defenses from
 those numbers, so bot results are the second balance signal next to this table.
 
-Full machine-readable results (every config, every tower): `out/bench.json` (gitignored scratch,
-regenerate with `--json`).
+Full machine-readable results (every config, every tower): `out/balance/bench.json` (gitignored
+scratch, regenerate with `--json`).

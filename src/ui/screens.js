@@ -35,7 +35,7 @@ function laneText(m) {
 const FIRST_SEEN = UNLOCK;   // first wave each enemy appears in (src/data/waves.js)
 const TITANS = [
   { kind: 'maw', name: 'Maw', waves: 'Waves 20, 80, 140', desc: 'Spits meteors behind itself as it advances. The grade of what it spits rises every appearance.' },
-  { kind: 'aegis', name: 'Aegis', waves: 'Waves 40, 100, 160', desc: 'Carries a regenerating shield worth a quarter of its hull. Only non-Kinetic damage breaks it, and it restores after 8 s without damage.' },
+  { kind: 'aegis', name: 'Aegis', waves: 'Waves 40, 100, 160', desc: 'Carries a regenerating shield worth a quarter of its hull. Kinetic hits deal only a fifth of their damage to it, and it restores after 8 s without being hit.' },
   { kind: 'rift', name: 'Rift', waves: 'Waves 60, 120, 180', desc: 'At 75, 50 and 25% hull it blinks forward along the channel and stuns towers within 150 units for 1.5 s.' },
 ];
 const MODIFIERS = [

@@ -5,9 +5,11 @@ import { TOWERS } from '../src/data/towers/index.js';
 import { HEROES } from '../src/data/heroes.js';
 import { MAPS } from '../src/data/maps.js';
 import { ENEMIES, familyMass } from '../src/data/enemies.js';
-import { priceFor, SELL_RATE, heroXpForWave, heroXpNeed, TICK } from '../src/data/economy.js';
+import { priceFor, SELL_RATE, heroXpForWave, heroXpNeed, TICK, incomeFactor } from '../src/data/economy.js';
+import { payWaveIncome } from '../src/sim/economy.js';
 import { Path } from '../src/sim/path.js';
 import { Rng } from '../src/core/rng.js';
+import { buildWave } from '../src/sim/wavegen.js';
 
 const verbose = process.argv.includes('--verbose');
 let passed = 0, failed = 0;
@@ -212,6 +214,69 @@ section('vault interest is capped', () => {
   } finally { if (saved) TOWERS.rig = saved; else delete TOWERS.rig; }
 });
 
+section('vault interest follows c(w)', () => {
+  const saved = TOWERS.rig;
+  TOWERS.rig = { id: 'rig', name: 'Test Rig', cost: 1000, radius: 22, base: { range: 0, attacks: {}, income: { perWave: 0, vault: { rate: 0.1, cap: 1000 } } }, paths: [] };
+  try {
+    for (const w of [30, 50, 80, 120]) {
+      const sim = newSim(); sim.state.cash = 1e5;
+      const rid = place(sim, 'rig');
+      const t = sim.getTower(rid);
+      t.data.vault = 500;
+      payWaveIncome(sim, w);
+      near(t.data.vault, 500 + 50 * incomeFactor(w), `wave ${w}: interest = rate x balance x c(w)`);
+    }
+  } finally { if (saved) TOWERS.rig = saved; else delete TOWERS.rig; }
+});
+
+section('ship stuns do not chain', () => {
+  const sim = newSim(); sim.state.lives = 1e9;
+  const e = sim.spawnEnemy('hauler', { d: 300 });
+  const fx = { stun: { t: 1, shipT: 0.5 } };
+  sim.applyEffects(e, fx, SRC('ENERGY'));
+  near(e.stunT, 0.5, 'first stun lands');
+  sim.applyEffects(e, { stun: { t: 1, shipT: 2 } }, SRC('ENERGY'));
+  near(e.stunT, 0.5, 'a running stun is not extended on a ship');
+  for (let i = 0; i < Math.round(0.55 / TICK); i++) sim.step();
+  ok(e.stunT <= 0 && e.stunImmT > 0, 'immunity window after the stun');
+  sim.applyEffects(e, fx, SRC('ENERGY'));
+  ok(e.stunT <= 0, 'no stun during the immunity window');
+  for (let i = 0; i < Math.round(1.05 / TICK); i++) sim.step();
+  sim.applyEffects(e, fx, SRC('ENERGY'));
+  near(e.stunT, 0.5, 'stuns again after the window');
+  // a meteor still takes the longest stun
+  const m = sim.spawnEnemy('rose', { d: 200 });
+  sim.applyEffects(m, { stun: { t: 1 } }, SRC('ENERGY'));
+  sim.applyEffects(m, { stun: { t: 2 } }, SRC('ENERGY'));
+  near(m.stunT, 2, 'meteor stuns refresh to the longest');
+});
+
+section('a ship stops a penetrating rail slug', () => {
+  // Siege Rail (4-0-0): a line of 5; the first ship in the line stops the slug
+  const sim = newSim(); sim.state.cash = 1e6; sim.state.lives = 1e9;
+  const id = place(sim, 'rail');
+  for (let k = 0; k < 4; k++) sim.upgrade(id, 0);
+  const t = sim.getTower(id);
+  const a = t.stats.attacks.main;
+  ok(a.line && a.pierce === 5, 'Siege Rail fires a 5-target line');
+  const p = sim.pathPoint(0, 400);
+  const ships = [0, 1, 2].map(() => sim.spawnEnemy('hauler', { d: 400 }));
+  const hp0 = ships.map((e) => e.hp);
+  t.cd.main = 0; t.targeting = 'first';
+  for (let i = 0; i < 3 && ships.every((e) => e.hp === e.maxHp); i++) sim.step();
+  const hitShips = ships.filter((e, i) => e.hp < hp0[i]).length;
+  eq(hitShips, 1, 'three stacked Haulers: one slug damages one hull');
+  const s2 = newSim(); s2.state.cash = 1e6; s2.state.lives = 1e9;
+  const id2 = place(s2, 'rail');
+  for (let k = 0; k < 4; k++) s2.upgrade(id2, 0);
+  const t2 = s2.getTower(id2);
+  const mets = [0, 1, 2, 3].map(() => s2.spawnEnemy('obsidian', { d: 400 }));
+  t2.cd.main = 0;
+  for (let i = 0; i < 3 && mets.every((e) => e.hp === e.maxHp && !e.dead); i++) s2.step();
+  ok(mets.filter((e) => e.dead || e.hp < e.maxHp).length >= 2, 'the same slug still punches through stacked meteors');
+  void p;
+});
+
 section('rig cap', () => {
   const saved = TOWERS.rig;
   TOWERS.rig = { id: 'rig', name: 'Test Rig', cost: 100, radius: 16, base: { range: 0, attacks: {}, income: { perWave: 1 } }, paths: [] };
@@ -301,7 +366,7 @@ section('overflow into children', () => {
   near(sim4.state.cash - c0, 5, 'bounty 1 per shell at wave 5');
   const sim5 = newSim(); const c5 = sim5.state.cash;
   sim5.damage(sim5.spawnEnemy('rust', { d: 800, wave: 100 }), 1, 'VOID', SRC('VOID'));
-  near(sim5.state.cash - c5, 0.25, 'bounty scaled by c(100)=0.25');
+  near(sim5.state.cash - c5, incomeFactor(100), 'bounty scaled by c(100) = ' + incomeFactor(100));
 });
 
 section('no overflow into ship children', () => {
@@ -355,6 +420,23 @@ section('nanite regrow', () => {
   ok(sim.state.enemies.some((x) => !x.dead && x.type === 'cobalt' && x.phantom), 'children inherit phantom');
 });
 
+section('specter scout (wave 50 debut)', () => {
+  const sim = newSim(); sim.state.lives = 1e6;
+  const L = sim.pathLength(0);
+  const e = sim.spawnEnemy('specter', { d: L - 1, mods: { scout: true } });
+  eq(e.hp, 80, 'scout Specter hull is a fifth of 400');
+  eq(familyMass('specter', 1, false, true), 80, 'familyMass(specter, scout) = 80');
+  for (let i = 0; i < 10; i++) sim.step();
+  eq(1e6 - sim.state.lives, 80, 'a leaked scout costs 80 Integrity (a full Specter costs 816)');
+  const s2 = newSim();
+  const k = s2.spawnEnemy('specter', { d: 200, mods: { scout: true } });
+  s2.damage(k, 1000, 'VOID', SRC('VOID'));
+  eq(s2.state.enemies.filter((x) => !x.dead).length, 0, 'a destroyed scout drops no cargo');
+  const w50 = buildWave(50);
+  ok(w50.groups.some((g) => g.type === 'specter' && g.mods.scout), 'wave 50 debuts the Specter as a scout');
+  ok(!buildWave(53).groups.some((g) => g.mods.scout), 'later Specters are full');
+});
+
 section('leak mass', () => {
   const sim = newSim();
   const L = sim.pathLength(0);
@@ -389,9 +471,9 @@ section('storm titans', () => {
   const t = sim.spawnEnemy('titan', { d: 400, titan: { kind: 'aegis', tier: 1, hp: 3000 } });
   sim.step();
   ok(sim.state.titan && sim.state.titan.maxShield === 750, 'aegis shield = 25% of hull, exposed in state.titan');
-  ok(sim.damage(t, 100, 'KINETIC', SRC('KINETIC')).dealt === 0, 'KINETIC cannot break the shield');
+  ok(Math.abs(sim.damage(t, 100, 'KINETIC', SRC('KINETIC')).dealt - 20) < 1e-9 && Math.abs(t.titan.shield - 730) < 1e-9, 'KINETIC deals a fifth of its damage to the shield');
   sim.damage(t, 800, 'BLAST', SRC('BLAST'));
-  ok(t.titan.shield === 0 && Math.abs(t.hp - 2950) < 1e-9, 'BLAST breaks shield, overflow hits hull');
+  ok(t.titan.shield === 0 && Math.abs(t.hp - 2930) < 1e-9, 'BLAST breaks shield, overflow hits hull');
   ok(sim.damage(t, 10, 'KINETIC', SRC('KINETIC')).dealt === 10, 'KINETIC hits hull once shield is down');
   for (let i = 0; i < Math.round(8.2 / TICK); i++) sim.step();
   eq(t.titan.shield, 750, 'shield restores after 8 s without damage');
@@ -597,6 +679,15 @@ section('lanes', () => {
     const sim = new Sim({ mapId: m.id, seed: 3 });
     ok(sim.lanes === m.paths.length, `${m.id}: ${sim.lanes} lanes`);
     sim.state.lives = 1e9;
+    if (m.laneOpen) {
+      // the second lane opens later: wave 1 uses lane 0 only, then from laneOpen.full both
+      const s0 = new Sim({ mapId: m.id, seed: 3 }); s0.state.lives = 1e9; s0.startWave();
+      for (let i = 0; i < 60 * 12; i++) s0.step();
+      ok(s0.state.enemies.every((e) => e.lane === 0), `${m.id}: before wave ${m.laneOpen.wave} every spawn uses lane 0`);
+      eq(s0.laneShare(m.laneOpen.wave - 1), 0, `${m.id}: lane share 0 before opening`);
+      ok(s0.laneShare(m.laneOpen.wave) > 0 && s0.laneShare(m.laneOpen.full - 1) < 0.5, `${m.id}: lane share ramps`);
+      sim.skipTo(m.laneOpen.full);
+    }
     sim.startWave();
     for (let i = 0; i < 60 * 12; i++) sim.step();
     const lanes = new Set(sim.state.enemies.map((e) => e.lane));

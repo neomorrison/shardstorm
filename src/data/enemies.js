@@ -25,7 +25,7 @@ export const ENEMIES = {
   hauler:       { name: 'Hauler',       kind: 'ship', speed: 1.0,  hp: 200,   immune: [],                   children: [['obsidian', 4]],                    radius: 34, color: '#4f6d8f' },
   warbarge:     { name: 'Warbarge',     kind: 'ship', speed: 0.25, hp: 700,   immune: [],                   children: [['hauler', 4]],                      radius: 44, color: '#8f4f4f' },
   dreadnought:  { name: 'Dreadnought',  kind: 'ship', speed: 0.18, hp: 4000,  immune: [],                   children: [['warbarge', 4]],                    radius: 56, color: '#3f7f5a' },
-  specter:      { name: 'Specter',      kind: 'ship', speed: 2.75, hp: 400,   immune: ['KINETIC', 'BLAST'], children: [['obsidian', 4]], phantom: true, childMods: { phantom: true, nanite: true }, radius: 30, color: '#20242c' },
+  specter:      { name: 'Specter',      kind: 'ship', speed: 2.2,  hp: 400,   immune: ['KINETIC', 'BLAST'], children: [['obsidian', 4]], phantom: true, childMods: { phantom: true, nanite: true }, radius: 30, color: '#20242c' },
   worldbreaker: { name: 'Worldbreaker', kind: 'ship', speed: 0.18, hp: 20000, immune: [],                   children: [['dreadnought', 2], ['specter', 3]], radius: 70, color: '#2a2d3a' },
 };
 
@@ -56,9 +56,14 @@ function derive(id, seen = new Set()) {
 }
 for (const id of Object.keys(ENEMIES)) derive(id);
 
+// A scout ship (wave modifier `scout`, used for a ship class's first appearance) flies with an
+// empty hold and a fraction of its hull, so a first leak teaches instead of ending the run.
+export const SCOUT_HULL = 0.2;
+
 // Mass of an enemy family when every ship hull is multiplied by H and plated doubles the top shell.
-export function familyMass(id, hullMult = 1, plated = false) {
+export function familyMass(id, hullMult = 1, plated = false, scout = false) {
   const d = ENEMIES[id];
+  if (scout && d.kind === 'ship') return d.hp * hullMult * SCOUT_HULL * (plated ? 2 : 1);
   const top = d.hp * (d.kind === 'ship' ? hullMult : 1) * (plated ? 2 : 1);
   // children: hull part scaled by H, meteor part unchanged
   let childMass = 0;

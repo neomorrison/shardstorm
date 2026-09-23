@@ -107,12 +107,15 @@ function hitscanHit(sim, t, a, target, ox, oy, ang) {
     }
     if (hits.indexOf(target) < 0) { target._lt = -1; hits.push(target); }
     hits.sort((p, q2) => p._lt - q2._lt);
+    // A ship hull stops a penetrating line: slugs punch through meteors, but a stack of slow
+    // ships cannot multiply one shot (docs/BALANCE.md, late game).
     let n = 0;
     for (let i = 0; i < hits.length && n < a.pierce; i++) {
       const e = hits[i];
       if (e.dead) continue;
       damageEnemy(sim, e, a.damage, a.dtype, a._src, -1, a.onHit);
       n++;
+      if (e.ship) break;
     }
   } else {
     damageEnemy(sim, target, a.damage, a.dtype, a._src, -1, a.onHit);

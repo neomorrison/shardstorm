@@ -173,22 +173,22 @@ export default {
     {
       name: 'Swarm',
       upgrades: [
-        { name: 'Third Drone', cost: 420, desc: 'Adds a third drone.',
+        { name: 'Third Drone', cost: 330, desc: 'Adds a third drone.',
           apply(s) { main(s).count += 1; } },
-        { name: 'Rapid Guns', cost: 850, desc: 'Drone guns fire 33% faster and drones fly 15% faster.',
+        { name: 'Rapid Guns', cost: 640, desc: 'Drone guns fire 33% faster and drones fly 15% faster.',
           apply(s) { gun(s).cooldown *= 0.75; main(s).droneSpeed *= 1.15; } },
-        { name: 'Drone Squadron', cost: 2700, desc: 'Deploys 5 drones that fire twin needles, each piercing 3 meteors.',
+        { name: 'Drone Squadron', cost: 2400, desc: 'Deploys 5 drones that fire twin needles, each piercing 3 meteors.',
           apply(s) {
             const a = main(s), w = gun(s);
             a.count += 2; w.count = (w.count || 1) + 1; w.spread = 0.14; w.pierce += 1; w.visual = 'needle'; w.color = '#d6fffa';
           } },
-        { name: 'Swarm Protocol', cost: 9000, desc: 'Deploys 8 faster drones whose needles deal 2 damage, fire 25% faster and can hit frozen meteors.',
+        { name: 'Swarm Protocol', cost: 9500, desc: 'Deploys 8 faster drones whose needles deal 2 damage, fire 25% faster and can hit frozen meteors.',
           apply(s) {
             const a = main(s), w = gun(s);
             a.count += 3; a.droneSpeed += 60; w.damage += 1; w.cooldown *= 0.8;
             w.bypass = [...(w.bypass || []), 'FROZEN'];
           } },
-        { name: 'Hive Carrier', cost: 45000, desc: 'Deploys 12 faster drones that fire 67% faster with needles that deal 4 damage and pierce 5 meteors. Patrol radius +60.',
+        { name: 'Hive Carrier', cost: 32000, desc: 'Deploys 12 faster drones that fire 67% faster with needles that deal 4 damage and pierce 5 meteors. Patrol radius +60.',
           apply(s) {
             const a = main(s), w = gun(s);
             a.count += 4; a.droneSpeed += 80; w.damage += 2; w.pierce += 2; w.cooldown *= 0.6; w.speed += 250;
@@ -201,31 +201,31 @@ export default {
     {
       name: 'Bomber',
       upgrades: [
-        { name: 'Armor Piercing', cost: 380, desc: 'Drone rounds deal 3 extra damage to ships.',
-          apply(s) { const w = gun(s); w.shipDamage = (w.shipDamage || 0) + 3; } },
-        { name: 'Explosive Rounds', cost: 800, desc: 'Rounds switch to BLAST damage, which can hit Iron and frozen meteors but not Magma.',
-          apply(s) { const w = gun(s); w.dtype = 'BLAST'; w.color = '#ffd08a'; main(s).dtype = 'BLAST'; } },
-        { name: 'Bomber Drones', cost: 3000, desc: 'Drones become bombers that fire pairs of homing BLAST missiles, each exploding for 4 damage across 55 units.',
+        { name: 'Armor Piercing', cost: 350, desc: 'Drone rounds deal 2 extra damage to ships.',
+          apply(s) { const w = gun(s); w.shipDamage = (w.shipDamage || 0) + 2; } },
+        { name: 'Explosive Rounds', cost: 700, desc: 'Rounds deal 1 more damage to ships and switch to BLAST damage, which can hit Iron and frozen meteors but not Magma.',
+          apply(s) { const w = gun(s); w.shipDamage = (w.shipDamage || 0) + 1; w.dtype = 'BLAST'; w.color = '#ffd08a'; main(s).dtype = 'BLAST'; } },
+        { name: 'Bomber Drones', cost: 2200, desc: 'Drones become bombers that fire pairs of homing BLAST missiles, each exploding for 5 damage across 55 units.',
           apply(s) {
             const w = gun(s);
             main(s).dtype = 'BLAST';
             w.dtype = 'BLAST'; w.damage = 2; w.pierce = 1; w.count = 2; w.spread = 0.5; w.speed = 520; w.homing = 8; w.cooldown = 1;
             w.range = 150; w.projRadius = 7; w.lifetime = 0.9; w.splashOnExpire = true;
-            w.splash = { radius: 55, damage: 4, pierce: 16, dtype: 'BLAST' };
+            w.splash = { radius: 55, damage: 5, pierce: 16, dtype: 'BLAST' };
             w.visual = 'missile'; w.color = '#ffb347';
             const b = bay(s); b.look = 'bomber'; b.droneColor = '#ff9f43';
           } },
-        { name: 'Heavy Bombers', cost: 11000, desc: 'A third bomber joins, and missiles reload 10% faster and deal 7 damage (27 to ships) in a wider blast.',
+        { name: 'Heavy Bombers', cost: 7500, desc: 'A third bomber joins, and missiles reload 10% faster and deal 8 damage (20 to ships) in a wider blast.',
           apply(s) {
             const a = main(s), w = gun(s), sp = w.splash;
-            a.count += 1; sp.damage += 3; sp.radius += 15; sp.pierce += 8; sp.shipDamage = (sp.shipDamage || 0) + 20;
+            a.count += 1; sp.damage += 3; sp.radius += 15; sp.pierce += 8; sp.shipDamage = (sp.shipDamage || 0) + 12;
             w.cooldown *= 0.9; w.projRadius = 9;
           } },
-        { name: 'Strike Wing', cost: 52000, desc: 'Four faster bombers fire 3-missile salvos, 33% faster, that deal 16 damage (84 to ships). Unlocks Bombing Run: the wing carpet-bombs the whole channel.',
+        { name: 'Strike Wing', cost: 47000, desc: 'Four faster bombers fire 3-missile salvos, 33% faster, that deal 17 damage (85 to ships). Unlocks Bombing Run: the wing carpet-bombs the whole channel.',
           apply(s) {
             const a = main(s), w = gun(s), sp = w.splash;
             a.count += 1; a.droneSpeed += 80; w.count = 3; w.spread = 0.7; w.cooldown *= 0.75;
-            sp.damage += 9; sp.radius += 20; sp.pierce += 16; sp.shipDamage = (sp.shipDamage || 0) + 48;
+            sp.damage += 9; sp.radius += 20; sp.pierce += 16; sp.shipDamage = (sp.shipDamage || 0) + 56;
             w.color = '#ff7a3d';
             bay(s).droneColor = '#ff7a3d';
             s.abilities.push(bombingRun);
@@ -235,27 +235,27 @@ export default {
     {
       name: 'Tractor',
       upgrades: [
-        { name: 'Afterburners', cost: 360, desc: 'Drones fly 35% faster and patrol 50 units farther.',
-          apply(s) { main(s).droneSpeed *= 1.35; s.range += 50; } },
-        { name: 'Sensor Drones', cost: 750, desc: 'Detection: drones can target Phantom meteors. Patrol radius +30.',
+        { name: 'Afterburners', cost: 320, desc: 'Drones fly 35% faster, patrol 50 units farther and fire 15% faster.',
+          apply(s) { main(s).droneSpeed *= 1.35; s.range += 50; gun(s).cooldown *= 0.87; } },
+        { name: 'Sensor Drones', cost: 640, desc: 'Detection: drones can target Phantom meteors. Patrol radius +30.',
           apply(s) { s.detection = true; s.range += 30; } },
-        { name: 'Tractor Drones', cost: 2800, desc: 'Tractor beams drag each target (up to Aurora size) as far as 160 units back up the channel, and rounds deal 2 damage.',
+        { name: 'Tractor Drones', cost: 1800, desc: 'Tractor beams drag each target (up to Aurora size) as far as 160 units back up the channel, and rounds deal 3 damage, pierce 3 meteors and fire 25% faster.',
           apply(s) {
-            gun(s).damage += 1;
+            const w = gun(s); w.damage += 2; w.pierce += 1; w.cooldown *= 0.8;
             const b = bay(s);
             b.look = 'tractor'; b.droneColor = '#7dffb0';
             b.tow = { speed: 220, cap: 160, maxMass: 50, ships: false, shipSpeed: 0, shipCap: 0, shipSlow: 1, titanSlow: 1 };
           } },
-        { name: 'Heavy Tractors', cost: 10500, desc: 'A third drone joins, and tractors drag any meteor 240 units back and hold ships at 60% speed while hauling them 150 units back.',
-          apply(s) {
-            const a = main(s), t = bay(s).tow;
-            a.count += 1;
-            t.speed = 280; t.cap = 240; t.maxMass = Infinity; t.ships = true; t.shipSpeed = 45; t.shipCap = 150; t.shipSlow = 0.6; t.titanSlow = 1;
-          } },
-        { name: 'Gravity Hauler', cost: 50000, desc: 'Four haulers with 6-damage rounds hold ships at 40% speed, drag each one up to 600 units back up the channel and slow Storm Titans by 30%.',
+        { name: 'Heavy Tractors', cost: 9900, desc: 'Two more drones join, rounds deal 6 damage, and tractors drag any meteor 240 units back and hold ships (not Storm Titans) at 60% speed while hauling them 150 units back.',
           apply(s) {
             const a = main(s), w = gun(s), t = bay(s).tow;
-            a.count += 1; w.damage += 4; w.pierce += 2; w.cooldown *= 0.6;
+            a.count += 2; w.damage += 3;
+            t.speed = 280; t.cap = 240; t.maxMass = Infinity; t.ships = true; t.shipSpeed = 45; t.shipCap = 150; t.shipSlow = 0.6; t.titanSlow = 1;
+          } },
+        { name: 'Gravity Hauler', cost: 32000, desc: 'The four haulers get 10-damage rounds that fire 3 times as fast, hold ships at 40% speed, drag each one up to 600 units back up the channel and slow Storm Titans by 30%.',
+          apply(s) {
+            const a = main(s), w = gun(s), t = bay(s).tow;
+            w.damage += 4; w.pierce += 2; w.cooldown /= 3;
             t.shipSpeed = 120; t.shipCap = 600; t.shipSlow = 0.4; t.titanSlow = 0.7;
             bay(s).droneColor = '#b6ffd0';
           } },

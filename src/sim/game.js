@@ -5,7 +5,7 @@ import { Hasher } from '../core/math.js';
 import { MAPS } from '../data/maps.js';
 import {
   DIFFICULTIES, TICK, WORLD_W, WORLD_H, RIG_CAP, waveBonus, heroXpForWave, heroXpNeed,
-  HERO_MAX_LEVEL, TITAN_EVERY, titanHp,
+  HERO_MAX_LEVEL, TITAN_EVERY, titanHp, priceFor,
 } from '../data/economy.js';
 import { Path } from './path.js';
 import { SpatialHash } from './spatial.js';
@@ -21,7 +21,7 @@ import { updateProjectiles, launchProjectile, explode as explodeImpl } from './p
 import { snapDrones, removeTowerDrones, fireAt } from './attacks.js';
 import {
   placePrice, basePrice, upgradePrice, sellValue as sellValueImpl, payWaveIncome, withdrawVault,
-  refineryBonus, discountAt,
+  refineryBonus, discountAt, consumeDiscount,
 } from './economy.js';
 import { updateAbilities, abilityBar as abilityBarImpl, useAbility as useAbilityImpl, addTempBuff, towersNear } from './abilities.js';
 import { serializeSim, restoreSim } from './save.js';
@@ -228,7 +228,7 @@ export class Sim {
     createEnemy(this, en.type, {
       lane: en.lane, d: 0, wave: spec.wave,
       hullMult: spec.hullMult || 1, speedMult: spec.speedMult || 1,
-      phantom: !!mods.phantom, nanite: !!mods.nanite, plated: !!mods.plated,
+      phantom: !!mods.phantom, nanite: !!mods.nanite, plated: !!mods.plated, scout: !!mods.scout,
       off: (this.rng() - 0.5) * this.map.pathWidth * 0.36,
     });
   }
@@ -342,9 +342,10 @@ export class Sim {
     const spec = buildWave(w, { lanes });
     const queue = [];
     let seq = 0;
+    const pace = this.paceAt(w);
     for (const g of spec.groups || []) {
       const count = Math.max(0, g.count | 0);
-      const start = g.start || 0, spacing = g.spacing || 0;
+      const start = (g.start || 0) * pace, spacing = (g.spacing || 0) * pace;
       for (let i = 0; i < count; i++) {
         let lane;
         if (g.lane === -1) lane = i % lanes;
@@ -352,6 +353,7 @@ export class Sim {
         queue.push({ time: start + i * spacing, type: g.type, lane, mods: g.mods || null, titan: null, seq: seq++ });
       }
     }
+    const laneTip = this._rampLanes(w, queue);
     let titan = spec.titan || null;
     if (!titan && w % TITAN_EVERY === 0) {
       const tier = w / TITAN_EVERY;
@@ -360,14 +362,50 @@ export class Sim {
     if (titan) {
       const tier = titan.tier || Math.max(1, Math.round(w / TITAN_EVERY));
       const lane = titan.lane !== undefined ? ((titan.lane % lanes) + lanes) % lanes : (tier - 1) % lanes;
-      queue.push({ time: titan.start || 0, type: 'titan', lane, mods: null, titan: { ...titan, tier }, seq: seq++ });
+      queue.push({ time: (titan.start || 0) * pace, type: 'titan', lane, mods: null, titan: { ...titan, tier }, seq: seq++ });
     }
     queue.sort((a, b) => a.time - b.time || a.seq - b.seq);
     this._runs.set(w, { spec, queue, idx: 0 });
     st.activeWaves.push({ wave: w, t: 0, spawnsLeft: queue.length, spawnDone: queue.length === 0, duration: spec.duration || 0, titan: !!titan });
     if (!this._waveAlive.has(w)) this._waveAlive.set(w, 0);
     st.wave = w;
-    this.emit({ t: 'waveStart', wave: w, titan: titan ? titan.kind : null, name: spec.name || null, tip: spec.tip || null, theme: spec.theme || null });
+    this.emit({ t: 'waveStart', wave: w, titan: titan ? titan.kind : null, name: spec.name || null, tip: laneTip || spec.tip || null, theme: spec.theme || null });
+  }
+
+  // Per-map lane opening (map.laneOpen = { wave, full, tip }). Before `wave` every spawn of the
+  // wave uses lane 0; from `wave` to `full` lane 1 takes a share that ramps up to an even
+  // split, spawn by spawn in time order (deterministic); from `full` on the wave's own lanes
+  // apply. Wave content and mass never change, so records stay comparable across maps.
+  // Returns the map's tip on the opening wave, else null.
+  _rampLanes(w, queue) {
+    const lo = this.map.laneOpen;
+    if (!lo || this.lanes < 2 || w >= lo.full) return null;
+    const share = w < lo.wave ? 0 : 0.5 * (w - lo.wave + 1) / (lo.full - lo.wave + 1);
+    const order = queue.slice().sort((a, b) => a.time - b.time || a.seq - b.seq);
+    let acc = 0;
+    for (const en of order) {
+      acc += share;
+      if (acc >= 1 - 1e-9) { acc -= 1; en.lane = 1; } else en.lane = 0;
+    }
+    return w === lo.wave ? lo.tip || null : null;
+  }
+
+  // Per-map pacing (map.pace = { mult, until, fade }): spawn times of wave w are stretched by
+  // mult up to wave `until`, easing back to 1 over the next `fade` waves. Mass and content never
+  // change, only density, so two-lane maps can give a split defense the same time per meteor.
+  paceAt(w) {
+    const p = this.map.pace;
+    if (!p) return 1;
+    const f = w <= p.until ? 1 : Math.max(0, 1 - (w - p.until) / (p.fade || 10));
+    return 1 + (p.mult - 1) * f;
+  }
+
+  // Share of wave w's spawns on the second lane, for tools (0.5 = even split).
+  laneShare(w) {
+    const lo = this.map.laneOpen;
+    if (this.lanes < 2) return 0;
+    if (!lo || w >= lo.full) return 0.5;
+    return w < lo.wave ? 0 : 0.5 * (w - lo.wave + 1) / (lo.full - lo.wave + 1);
   }
 
   setAutoStart(on) {
@@ -384,7 +422,9 @@ export class Sim {
   waveInfo(w) {
     const n = w ?? this.state.wave + 1;
     const spec = buildWave(n, { lanes: this.lanes });
-    return { wave: n, name: spec.name || null, tip: spec.tip || null, theme: spec.theme || null, titan: spec.titan ? spec.titan.kind : null };
+    const lo = this.map.laneOpen;
+    const tip = lo && this.lanes > 1 && n === lo.wave && lo.tip ? lo.tip : spec.tip || null;
+    return { wave: n, name: spec.name || null, tip, theme: spec.theme || null, titan: spec.titan ? spec.titan.kind : null };
   }
 
   // ---------------------------------------------------------------- placement
@@ -437,6 +477,7 @@ export class Sim {
     const st = this.state;
     const def = getDef(type);
     st.cash -= chk.price;
+    if (chk.price < basePrice(this, def)) consumeDiscount(this, type, x, y, def);
     const t = createTower(this, def, x, y);
     t.paid = chk.price;
     t.undoPaid = st.phase === 'build' ? chk.price : 0;
@@ -504,6 +545,7 @@ export class Sim {
     if (info.state !== 'available') return fail(info.reason || 'Cannot upgrade');
     const st = this.state;
     st.cash -= info.cost;
+    if (info.cost < priceFor(t.def.paths[path].upgrades[t.levels[path]].cost, st.difficulty)) consumeDiscount(this, t.type, t.x, t.y, t.def);
     t.paid += info.cost;
     if (st.phase === 'build') t.undoPaid += info.cost;
     t.undoable = t.undoPaid > 0 && t.undoPaid >= t.paid;
@@ -673,7 +715,7 @@ export class Sim {
       lane: opts.lane || 0, d: opts.d || 0, wave: opts.wave ?? this.state.wave,
       hullMult: opts.hullMult || 1, speedMult: opts.speedMult || 1,
       phantom: !!(mods.phantom || opts.phantom), nanite: !!(mods.nanite || opts.nanite), plated: !!(mods.plated || opts.plated),
-      origType: opts.origType, off: opts.off || 0,
+      scout: !!(mods.scout || opts.scout), origType: opts.origType, off: opts.off || 0,
     });
   }
 

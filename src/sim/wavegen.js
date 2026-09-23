@@ -71,7 +71,7 @@ export function titanForWave(w) {
   return { kind: TITAN_KINDS[(tier - 1) % TITAN_KINDS.length], tier };
 }
 
-const unitMass = (type, plated) => familyMass(type, 1, plated);
+const unitMass = (type, plated, scout = false) => familyMass(type, 1, plated, scout);
 const isShip = (type) => ENEMIES[type].kind === 'ship';
 
 // ---------------------------------------------------------------------------------------------
@@ -187,13 +187,20 @@ export const THEMES = {
 export const THEME_ORDER = ['swarm', 'dense', 'special', 'phantom', 'nanite', 'convoy', 'armored'];
 
 // New ship classes debut as a single featured unit on their unlock wave.
+// `win` (optional) places the featured hull in the wave; `warn` is shown as the tip of the wave
+// before, so the player can prepare (the preview strip shows the new ship too).
 const DEBUTS = {
-  50: { types: ['warbarge', 'specter'], name: 'Heavy Company',
-    tip: 'Warbarges carry four Haulers. Specters are phantom ships immune to KINETIC and BLAST.' },
+  // The first Specter is a scout: an empty hold and a fifth of its hull (80 HP), so a leak costs
+  // 80 Integrity and teaches the counter. Full Specters (816 mass) follow from the next waves.
+  50: { types: ['warbarge', 'specter'], name: 'Heavy Company', win: { specter: [0.08, 0.12] }, scout: ['specter'],
+    tip: 'A Specter scout leads: a Phantom ship immune to KINETIC and BLAST. This one is empty; the next ones carry four Obsidian Hearts.',
+    warn: 'Next wave brings a Specter scout: a fast Phantom ship that ignores KINETIC and BLAST. Get detection plus THERMAL, ENERGY, CRYO or VOID damage ready.' },
   70: { types: ['dreadnought'], name: 'Dreadnought Rising',
-    tip: 'A Dreadnought carries four Warbarges. Its hull holds 4000 HP.' },
+    tip: 'A Dreadnought carries four Warbarges. Its hull holds 4000 HP.',
+    warn: 'Next wave brings the first Dreadnought: a slow 4000 HP hull carrying four Warbarges.' },
   90: { types: ['worldbreaker'], name: 'Worldbreaker',
-    tip: 'The Worldbreaker carries two Dreadnoughts and three Specters.' },
+    tip: 'The Worldbreaker carries two Dreadnoughts and three Specters.',
+    warn: 'Next wave brings the Worldbreaker: two Dreadnoughts and three Specters inside one hull.' },
 };
 
 // Themes rotate in shuffled blocks of seven: every theme once per block, never the same
@@ -359,7 +366,7 @@ function fitComposition(comps, B, cap) {
   let base = 0, hull = 0;
   for (const c of comps) {
     for (const e of c.entries) {
-      const f0 = familyMass(e.type, 0, c.plated);
+      const f0 = familyMass(e.type, 0, c.plated, !!c.scout);
       base += e.count * f0;
       hull += e.count * (e.unit - f0);
     }
@@ -407,7 +414,7 @@ function layoutEntry(c, e, D, rng, pw, out) {
 
 function rollMods(c, rng, pw) {
   const pick = (mode, p) => (mode === true ? true : mode === 'roll' ? rng() < p : false);
-  if (c.ship) return { phantom: false, nanite: false, plated: c.plated };
+  if (c.ship) return c.scout ? { phantom: false, nanite: false, plated: c.plated, scout: true } : { phantom: false, nanite: false, plated: c.plated };
   return {
     phantom: modUnlocked('phantom', pw.w) && pick(c.phantom, pw.phantom),
     nanite: modUnlocked('nanite', pw.w) && pick(c.nanite, pw.nanite),
@@ -425,7 +432,7 @@ function rollMods(c, rng, pw) {
 function assignLanes(groups, H) {
   const ship = [0, 0], pin = [0, 0];
   const extra = [];
-  const items = groups.map((g) => ({ g, u: familyMass(g.type, H, g.mods.plated) }));
+  const items = groups.map((g) => ({ g, u: familyMass(g.type, H, g.mods.plated, !!g.mods.scout) }));
   const ships = items.filter((x) => isShip(x.g.type))
     .sort((a, b) => b.u * b.g.count - a.u * a.g.count || a.g.start - b.g.start);
   for (const { g, u } of ships) {
@@ -515,10 +522,11 @@ function proceduralWave(w) {
   const debut = DEBUTS[w];
   if (debut) {
     for (const type of debut.types) {
+      const scout = !!(debut.scout && debut.scout.indexOf(type) >= 0);
       comps.push({
-        ladder: [type], plated: false, entries: [{ type, unit: unitMass(type, false), count: 1 }],
-        min: 1, max: 1, share: 0, pattern: 'convoy', win: [0.4, 0.6],
-        phantom: false, nanite: false, ship: true, fixed: true,
+        ladder: [type], plated: false, entries: [{ type, unit: unitMass(type, false, scout), count: 1 }],
+        min: 1, max: 1, share: 0, pattern: 'convoy', win: (debut.win && debut.win[type]) || [0.4, 0.6],
+        phantom: false, nanite: false, ship: true, fixed: true, scout,
       });
     }
   }
@@ -534,7 +542,7 @@ function proceduralWave(w) {
     wave: w, budget: B, hullMult: H, duration: D, speedMult: speedRamp(w),
     theme, name: debut ? debut.name : T.name,
     // Debut waves explain the new ship; otherwise a theme explains itself the first time it appears.
-    tip: debut ? debut.tip : w - AUTHORED_COUNT <= THEME_ORDER.length ? T.tip : null,
+    tip: debut ? debut.tip : w - AUTHORED_COUNT <= THEME_ORDER.length ? T.tip : DEBUTS[w + 1] ? DEBUTS[w + 1].warn || null : null,
     authored: false, groups,
   };
 }
@@ -621,7 +629,7 @@ export function buildWave(w, { lanes = 1 } = {}) {
 export function waveMass(spec) {
   const H = spec.hullMult || 1;
   let m = 0;
-  for (const g of spec.groups) m += g.count * familyMass(g.type, H, !!(g.mods && g.mods.plated));
+  for (const g of spec.groups) m += g.count * familyMass(g.type, H, !!(g.mods && g.mods.plated), !!(g.mods && g.mods.scout));
   return m;
 }
 
@@ -631,10 +639,10 @@ export function previewWave(w, opts) {
   const s = buildWave(w, opts);
   const map = new Map();
   for (const g of s.groups) {
-    const key = g.type + (g.mods.phantom ? ':p' : '') + (g.mods.nanite ? ':n' : '') + (g.mods.plated ? ':x' : '');
+    const key = g.type + (g.mods.phantom ? ':p' : '') + (g.mods.nanite ? ':n' : '') + (g.mods.plated ? ':x' : '') + (g.mods.scout ? ':s' : '');
     const e = map.get(key);
     if (e) e.count += g.count;
-    else map.set(key, { type: g.type, count: g.count, mods: { ...g.mods }, first: g.start, unit: unitMass(g.type, g.mods.plated) });
+    else map.set(key, { type: g.type, count: g.count, mods: { ...g.mods }, first: g.start, unit: unitMass(g.type, g.mods.plated, !!g.mods.scout) });
   }
   return [...map.values()]
     .sort((a, b) => b.unit - a.unit || a.first - b.first)

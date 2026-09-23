@@ -192,11 +192,11 @@ export default {
     {
       name: 'Blade Ring',
       upgrades: [
-        { name: 'Spin Up', cost: 160, desc: 'Fires 25% faster.',
+        { name: 'Spin Up', cost: 150, desc: 'Fires 25% faster.',
           apply(s) { main(s).cooldown *= 0.8; } },
-        { name: 'Twelve Point', cost: 300, desc: 'Fires 12 shards per volley, 10% faster.',
+        { name: 'Twelve Point', cost: 260, desc: 'Fires 12 shards per volley, 10% faster.',
           apply(s) { const a = main(s); a.count += 4; a.cooldown *= 0.9; } },
-        { name: 'Blade Ring', cost: 950, desc: 'Three spinning blades circle the pod and slice every meteor they touch, and shards pierce 1 more meteor.',
+        { name: 'Blade Ring', cost: 1000, desc: 'Three spinning blades circle the pod and slice every meteor they touch, and shards pierce 1 more meteor.',
           apply(s) {
             const a = main(s);
             a.pierce += 1; a.visual = 'blade'; a.color = BLADE;
@@ -214,10 +214,10 @@ export default {
             a.bypass = [...(a.bypass || []), 'FROZEN'];
             a.pierce += 1;
           } },
-        { name: 'Maelstrom', cost: 19500, desc: 'Ten blades in two rings deal 4 damage (10 to ships), and the pod fires 20 shards per volley 25% faster that deal 2 damage (4 to ships). Unlocks Maelstrom: the blades fly out to 210 units for 6 s.',
+        { name: 'Maelstrom', cost: 17000, desc: 'Ten blades in two rings deal 5 damage (10 to ships), and the pod fires 20 shards per volley 25% faster that deal 2 damage (4 to ships). Unlocks Maelstrom: the blades fly out to 210 units for 6 s.',
           apply(s) {
             const a = main(s), b = s.attacks.blades;
-            b.blades = 10; b.rings = 2; b.cuts = 10; b.damage += 2; b.shipDamage = (b.shipDamage || 0) + 6; b.bladeRadius = 14; b.scale = 0.8;
+            b.blades = 10; b.rings = 2; b.cuts = 10; b.damage += 3; b.shipDamage = (b.shipDamage || 0) + 5; b.bladeRadius = 14; b.scale = 0.8;
             a.count += 8; a.damage += 1; a.pierce += 1; a.cooldown *= 0.8; a.shipDamage = (a.shipDamage || 0) + 2;
             s.abilities.push(maelstrom);
           } },
@@ -226,15 +226,15 @@ export default {
     {
       name: 'Thermal Core',
       upgrades: [
-        { name: 'Heat Sink', cost: 200, desc: 'Fires 20% faster.',
+        { name: 'Heat Sink', cost: 180, desc: 'Fires 20% faster.',
           apply(s) { main(s).cooldown *= 0.83; } },
-        { name: 'Molten Shards', cost: 400, desc: 'Shards turn THERMAL: they hit Iron and frozen meteors and burn 1 damage per second for 1.5 s, but cannot hurt Prism.',
+        { name: 'Molten Shards', cost: 380, desc: 'Shards turn THERMAL: they hit Iron and frozen meteors and burn 1 damage per second for 1.5 s, but cannot hurt Prism.',
           apply(s) {
             const a = main(s);
             a.dtype = 'THERMAL'; a.color = FIRE; a.visual = 'ember';
             a.onHit = { ...(a.onHit || {}), burn: { dps: 1, t: 1.5 } };
           } },
-        { name: 'Ring of Fire', cost: 1700, desc: 'Fires a THERMAL ring of fire that hits up to 20 meteors in range for 1 damage and burns them, including Iron and frozen ones (never Prism).',
+        { name: 'Ring of Fire', cost: 1500, desc: 'Fires a THERMAL ring of fire that hits up to 20 meteors in range for 1 damage and burns them, including Iron and frozen ones (never Prism).',
           apply(s) {
             const a = main(s);
             a.kind = 'pulse'; a.dtype = 'THERMAL'; a.damage = 1; a.pierce = 20;
@@ -242,17 +242,17 @@ export default {
             a.onHit = { ...(a.onHit || {}), burn: { dps: 1, t: 1.5 } };
             delete a.radial; delete a.count; delete a.split; delete a.splitOn; delete a.lifetime;
           } },
-        { name: 'Inferno Core', cost: 4600, desc: 'The ring pulses 15% faster, reaches 25 units farther and hits up to 40 meteors for 2 damage (12 to ships), burning 2 per second.',
+        { name: 'Inferno Core', cost: 3200, desc: 'The ring pulses 40% faster, reaches 25 units farther and hits up to 40 meteors for 4 damage (12 to ships), burning 2 per second.',
           apply(s) {
             const a = main(s);
-            s.range += 25; a.damage += 1; a.pierce = 40; a.shipDamage = (a.shipDamage || 0) + 10;
-            a.cooldown *= 0.85; a.color = '#ff6a2a';
+            s.range += 25; a.damage += 3; a.pierce = 40; a.shipDamage = (a.shipDamage || 0) + 8;
+            a.cooldown /= 1.4; a.color = '#ff6a2a';
             a.onHit = { ...(a.onHit || {}), burn: { dps: 2, t: 2.5 } };
           } },
-        { name: 'Solar Flare', cost: 23000, desc: 'Solar flares 45 units wider pulse 70% faster, hit up to 120 targets for 6 damage (250 to ships) and burn 6 per second, stacking up to 30 on anything that stays inside.',
+        { name: 'Solar Flare', cost: 20000, desc: 'Solar flares 45 units wider pulse 70% faster, hit up to 120 targets for 6 damage (200 to ships) and burn 6 per second, stacking up to 30 on anything that stays inside.',
           apply(s) {
             const a = main(s);
-            s.range += 45; a.damage += 4; a.pierce = 120; a.shipDamage = (a.shipDamage || 0) + 234;
+            s.range += 45; a.damage += 2; a.pierce = 120; a.shipDamage = (a.shipDamage || 0) + 186;
             a.cooldown /= 1.7; a.color = '#ffd76a';
             a.onHit = { ...(a.onHit || {}), burn: { dps: 6, t: 3 } };
             s.attacks.stoke = { kind: 'custom', needsTarget: false, dtype: 'THERMAL', damage: 0, step: 3, cap: 30, update: updateStoke };
@@ -262,7 +262,7 @@ export default {
     {
       name: 'Cluster Shards',
       upgrades: [
-        { name: 'Long Shards', cost: 140, desc: 'Range +25 and shards fly 20% faster.',
+        { name: 'Long Shards', cost: 130, desc: 'Range +25 and shards fly 20% faster.',
           apply(s) { const a = main(s); s.range += 25; a.speed *= 1.2; fit(a, s); } },
         { name: 'Splinters', cost: 440, desc: 'Range +10, and each shard bursts into 2 splinters when it hits or reaches the end of its flight.',
           apply(s) {
@@ -275,29 +275,29 @@ export default {
               syncSplits(a);
             }
           } },
-        { name: 'Cluster Shards', cost: 1400, desc: 'Range +15, and heavy crystals pierce 2 meteors and burst into 3 splinters on every hit and at the end of their flight.',
+        { name: 'Cluster Shards', cost: 1200, desc: 'Range +15, and heavy crystals pierce 2 meteors and burst into 3 splinters on every hit and at the end of their flight.',
           apply(s) {
             const a = main(s);
             s.range += 15; a.pierce += 1; a.projRadius = 8; a.scale = 1.25; a.visual = 'crystal'; a.color = CRYSTAL;
             a.split.count = 3; a.splitOn = 'both';
             fit(a, s); syncSplits(a);
           } },
-        { name: 'Fracture Web', cost: 3800, desc: 'Crystals and splinters deal 2 damage, splinters that hit a meteor break into 2 more shards, and the pod gains detection.',
+        { name: 'Fracture Web', cost: 2600, desc: 'Fires 25% faster, crystals and splinters deal 2 damage, splinters that hit a meteor break into 2 more shards, and the pod gains detection.',
           apply(s) {
             const a = main(s);
             s.detection = true;
-            a.damage += 1;
+            a.cooldown /= 1.25; a.damage += 1;
             const sp = a.split.attack;
             sp.damage += 1;
             sp.split = { count: 2, spread: TAU, attack: splinter(1, 440, 0.1) };
             sp.splitOn = 'hit';
             syncSplits(a);
           } },
-        { name: 'Shatterstorm', cost: 19000, desc: 'Fires 4 more crystals twice as fast with 15 more range, and every shard deals 3 damage (8 to ships) and splits three generations deep.',
+        { name: 'Shatterstorm', cost: 13000, desc: 'Fires 4 more crystals 2.5 times as fast with 15 more range, and every shard deals 3 damage (8 to ships) and splits three generations deep.',
           apply(s) {
             const a = main(s);
             s.range += 15;
-            a.count += 4; a.cooldown *= 0.5; a.damage += 1; a.shipDamage = (a.shipDamage || 0) + 5;
+            a.count += 4; a.cooldown /= 2.5; a.damage += 1; a.shipDamage = (a.shipDamage || 0) + 5;
             a.scale = 1.4; a.color = '#3fd8ff';
             a.split.count = 4;
             const g1 = a.split.attack;

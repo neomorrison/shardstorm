@@ -213,7 +213,7 @@ Common fields on every attack: `kind, cooldown, dtype, damage, pierce, range (op
 - `slow`: strongest slow wins (lowest mult); ships use `shipMult` (default: no slow). Comets ignore CRYO slows.
 - `freeze`: meteors stop; frozen targets cannot be damaged by KINETIC unless the attack bypasses `FROZEN`. Ships cannot be frozen (convert to a 0.6 slow). Comets cannot be frozen.
 - `burn`: THERMAL damage over time, ticks every 0.5 s. Prism ignores it.
-- `stun`: stops movement; ships use `shipT` (default 0).
+- `stun`: stops movement; ships use `shipT` (default 0, halved on Titans). A ship stun never extends one already running, and a ship cannot be stunned again for `SHIP_STUN_IMMUNE` (1 s) after a stun ends.
 - `brittle`: damage taken `(dmg + add) x mult` for `t` seconds.
 - `knockback`: move back along path by `dist` (ships use `shipDist`, default 0).
 - `expose` / `strip`: removes Phantom (permanently for strip, timed for expose) so all towers can target it.
@@ -285,7 +285,7 @@ sim.emit(event)
 export function buildWave(w, { lanes = 1 } = {}) -> WaveSpec
 WaveSpec = {
   wave, budget, mass, duration, hullMult, speedMult,
-  groups: [{ type, count, start, spacing, lane /* 0..lanes-1, or -1 = alternate */, mods: { phantom, nanite, plated } }],
+  groups: [{ type, count, start, spacing, lane /* 0..lanes-1, or -1 = alternate */, mods: { phantom, nanite, plated, scout? } }],
   titan: null | { kind: 'maw' | 'aegis' | 'rift', tier, hp, start },
 }
 export function waveMass(spec) -> number
@@ -348,6 +348,7 @@ Additions and deviations the modules settled on while being built. They extend t
 
 ### Engine additions in the content phase
 - Storm Titans resist slows: a slow (or a freeze turned into a ship slow) is half as strong on a Titan (`TITAN_SLOW_RESIST = 0.5` in `src/sim/enemies.js`; a 0.4 slow becomes 0.7), matching stuns, which already last half as long. An effect can give Titans an exact value with `slow.titanMult` / `freeze.titanMult` (Absolute Zero and Gravity Hauler do).
+- Balance pass: `mods.scout` on a ship group spawns it with `SCOUT_HULL` (0.2) of its hull and an empty hold (`familyMass(type, H, plated, scout)`, `e.scout`, no children, leak = remaining hull); the wave 50 Specter debut uses it. A penetrating `line` hitscan stops at the first ship it damages. Two-lane maps may set `map.pace = { mult, until, fade }`; `Sim.paceAt(w)` stretches that wave's spawn times (never its content).
 - CRYO-immune meteors (Comet, Geode) are never slowed or frozen by CRYO effects, including on-hit effects passed down from a parent (`applyEffects` guard).
 - `findTarget(..., exclude)` accepts an array of ids or a number stamp (skip enemies whose `e._xs` equals it). Chain attacks stamp every enemy they hit, so exclusion is O(1) per check for long chains.
 - `sim.spawnProjectile(p)` sets the normalized attack's `key` from `p.attackKey` (or `p.key`), so custom projectiles report their `attackKey`.

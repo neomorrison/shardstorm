@@ -36,8 +36,9 @@ function tintUpdate(sim, tower) {
 // ------------------------------------------------------------------ Plasma Lance
 // From Plasma T4 the beam becomes a lance. The main attack stays an engine beam (it locks the
 // target, ramps and burns it, and bots and benches can value it); this companion attack runs
-// right after it, stretches each beam out to lineLength and burns every other enemy on that
-// line (up to `pierce` per tick, nearest first) at the beam's current ramp.
+// right after it, stretches the first `lines` beams (1: Prism Split forks stay plain beams, so
+// a Tri-Beam crosspath does not triple the lance) out to lineLength and burns every other enemy
+// on that line (up to `pierce` per tick, nearest first) at the beam's current ramp.
 // Per-wave scratch lives in tower.data._beam_lance (the engine deletes _beam_ keys when the
 // build phase starts, so saves and replays never see it).
 const hitBuf = [];
@@ -54,7 +55,8 @@ function lanceUpdate(sim, tower, atk, dt) {
   const half = atk.hitWidth;
   const src = srcOf(beam);
   const onHit = beam.onHit ? { onHit: beam.onHit } : undefined;
-  for (let k = 0; k < beams.length; k++) {
+  const nl = Math.min(beams.length, atk.lines || 1);
+  for (let k = 0; k < nl; k++) {
     const b = beams[k];
     const ang = Math.atan2(b.y2 - tower.y, b.x2 - tower.x);
     const ux = Math.cos(ang), uy = Math.sin(ang);
@@ -66,7 +68,11 @@ function lanceUpdate(sim, tower, atk, dt) {
       hitBuf.length = 0;
       for (let i = 0; i < q.length; i++) {
         const e = q[i];
-        if (e.dead || e.id === b.targetId || !hurts(e, beam.dtype, beam.bypass)) continue;
+        if (e.dead || !hurts(e, beam.dtype, beam.bypass)) continue;
+        // enemies a beam already holds are burned by that beam, not by the lance line too
+        let held = false;
+        for (let j = 0; j < beams.length; j++) if (beams[j].targetId === e.id) { held = true; break; }
+        if (held) continue;
         const rx = e.x - x0, ry = e.y - y0;
         const along = rx * ux + ry * uy;
         if (along < -e.radius || along > segLen + e.radius) continue;
@@ -103,7 +109,7 @@ export default {
     targetModes: ['first', 'last', 'strong', 'close'],
     attacks: {
       main: {
-        kind: 'beam', beams: 1, dps: 5, tickRate: 0.1, ramp: 0.5, rampMax: 2.5, width: 5, dtype: 'THERMAL',
+        kind: 'beam', beams: 1, dps: 5, tickRate: 0.1, ramp: 0.8, rampMax: 2.5, width: 5, dtype: 'THERMAL',
         color: '#ff4f5e', visual: 'laser',
       },
     },
@@ -115,9 +121,9 @@ export default {
     {
       name: 'Prism Split',
       upgrades: [
-        { name: 'Beam Splitter', cost: 550, desc: 'Splits into 2 beams that lock onto different targets.',
+        { name: 'Beam Splitter', cost: 480, desc: 'Splits into 2 beams that lock onto different targets.',
           apply(s) { main(s).beams += 1; } },
-        { name: 'Tri-Beam', cost: 1100, desc: 'Fires 3 beams. Range +15.',
+        { name: 'Tri-Beam', cost: 900, desc: 'Fires 3 beams. Range +15.',
           apply(s) { main(s).beams += 1; s.range += 15; } },
         { name: 'Prism Fork', cost: 3600, desc: 'Fires 5 rainbow beams that deal 2.5 times the damage and retarget twice as fast.',
           apply(s) {
@@ -125,26 +131,26 @@ export default {
             a.beams += 2; a.dps *= 2.5; a.width = 5; a.tickRate = 0.05;
             s.attacks.tint = { kind: 'custom', dtype: 'THERMAL', needsTarget: false, damage: 0, update: tintUpdate };
           } },
-        { name: 'Spectrum Array', cost: 13500, desc: 'Fires 8 beams that deal 2.2 times the damage and ramp up 50% faster.',
-          apply(s) { const a = main(s); a.beams += 3; a.dps *= 2.2; a.ramp *= 1.5; } },
-        { name: 'Rainbow Lattice', cost: 66000, desc: 'Fires 16 beams that deal triple damage, retarget faster and ramp up to 4x. Range +45.',
-          apply(s) { const a = main(s); a.beams += 8; a.dps *= 3; a.rampMax += 1.5; a.width = 4; a.tickRate = 1 / 30; s.range += 45; } },
+        { name: 'Spectrum Array', cost: 9500, desc: 'Fires 6 beams that deal 3.5 times the damage and ramp up 50% faster.',
+          apply(s) { const a = main(s); a.beams += 1; a.dps *= 3.5; a.ramp *= 1.5; } },
+        { name: 'Rainbow Lattice', cost: 48000, desc: 'Fires 8 beams that deal 7 times the damage, retarget faster and ramp up to 4x. Range +45.',
+          apply(s) { const a = main(s); a.beams += 2; a.dps *= 7; a.rampMax += 1.5; a.width = 4; a.tickRate = 1 / 30; s.range += 45; } },
       ],
     },
     {
       name: 'Focus',
       upgrades: [
-        { name: 'Focusing Lens', cost: 500, desc: 'Ramps up 60% faster, to 3x damage.',
+        { name: 'Focusing Lens', cost: 450, desc: 'Ramps up 60% faster, to 3x damage.',
           apply(s) { const a = main(s); a.ramp *= 1.6; a.rampMax += 0.5; } },
-        { name: 'Targeting Optics', cost: 1000, desc: 'Detection: can target Phantom meteors. Range +25.',
-          apply(s) { s.detection = true; s.range += 25; } },
-        { name: 'Burning Focus', cost: 4200, desc: 'A focused beam that deals 2.2 times the damage, ramps up to 5x and deals 30 extra damage per second to ships.',
+        { name: 'Targeting Optics', cost: 880, desc: 'Detection: can target Phantom meteors. Range +25, and ramps up to 4x damage.',
+          apply(s) { s.detection = true; s.range += 25; main(s).rampMax += 1; } },
+        { name: 'Burning Focus', cost: 5000, desc: 'A focused beam that deals 2.2 times the damage, ramps up to 5x and deals 30 extra damage per second to ships.',
           apply(s) {
             const a = main(s);
-            a.dps *= 2.2; a.rampMax += 2; a.shipDamage = (a.shipDamage || 0) + 3;
+            a.dps *= 2.2; a.rampMax += 1; a.shipDamage = (a.shipDamage || 0) + 3;
             a.width = 8; a.rampWidth = true; a.color = '#ffc94d'; a.visual = 'focus';
           } },
-        { name: 'Solar Lance', cost: 15500, desc: 'Deals twice the damage, ramps 50% faster up to 8x and deals 180 extra damage per second to ships.',
+        { name: 'Solar Lance', cost: 16000, desc: 'Deals twice the damage, ramps 50% faster up to 8x and deals 180 extra damage per second to ships.',
           apply(s) {
             const a = main(s);
             a.dps *= 2; a.ramp *= 1.5; a.rampMax += 3; a.shipDamage = (a.shipDamage || 0) + 15;
@@ -161,25 +167,25 @@ export default {
     {
       name: 'Plasma',
       upgrades: [
-        { name: 'Hot Plasma', cost: 600, desc: 'Beam deals 35% more damage.',
+        { name: 'Hot Plasma', cost: 480, desc: 'Beam deals 35% more damage.',
           apply(s) { main(s).dps *= 1.35; } },
-        { name: 'Plasma Burn', cost: 1200, desc: 'Targets keep burning for 4 damage per second for 2 s after the beam moves on.',
-          apply(s) { const a = main(s); a.onHit = { ...(a.onHit || {}), burn: { dps: 4, t: 2 } }; } },
-        { name: 'Void Plasma', cost: 4400, desc: 'Beam switches to VOID damage, which hits every meteor type including Prism, and deals 2.4 times the damage.',
+        { name: 'Plasma Burn', cost: 1100, desc: 'Targets keep burning for 8 damage per second for 2 s after the beam moves on.',
+          apply(s) { const a = main(s); a.onHit = { ...(a.onHit || {}), burn: { dps: 8, t: 2 } }; } },
+        { name: 'Void Plasma', cost: 2800, desc: 'Beam switches to VOID damage, which hits every meteor type including Prism, and deals 4 times the damage.',
           apply(s) {
             const a = main(s);
-            a.dtype = 'VOID'; a.dps *= 2.4; a.width = 7; a.color = '#b56bff'; a.visual = 'void';
+            a.dtype = 'VOID'; a.dps *= 4; a.width = 7; a.color = '#b56bff'; a.visual = 'void';
           } },
-        { name: 'Plasma Lance', cost: 15000, desc: 'The beam becomes a lance that deals 80% more damage and also burns up to 15 enemies along its length, Phantoms included.',
+        { name: 'Plasma Lance', cost: 8800, desc: 'The main beam becomes a lance that deals 2.8 times the damage and also burns up to 15 enemies along its length, Phantoms included.',
           apply(s) {
             const a = main(s);
-            a.dps *= 1.8; a.width = 9; a.rampWidth = true; a.color = '#c77dff'; a.visual = 'lance';
+            a.dps *= 2.8; a.width = 9; a.rampWidth = true; a.color = '#c77dff'; a.visual = 'lance';
             s.attacks.lance = { kind: 'custom', dtype: 'VOID', needsTarget: false, damage: 0, pierce: 15, lineLength: s.range + 50, hitWidth: 10, update: lanceUpdate };
           } },
-        { name: 'Singularity Lance', cost: 72000, desc: 'A 1100-unit lance that deals 4 times the damage, ramps twice as fast up to 5x and burns up to 50 enemies along it.',
+        { name: 'Singularity Lance', cost: 48000, desc: 'A 1100-unit lance that deals 4 times the damage, ramps twice as fast up to 5x and burns up to 50 enemies along it.',
           apply(s) {
             const a = main(s), l = s.attacks.lance;
-            a.dps *= 4; a.rampMax += 2.5; a.ramp *= 2; a.width = 16;
+            a.dps *= 4; a.rampMax = Math.max(5, a.rampMax + 1.5); a.ramp *= 2; a.width = 16;
             a.color = '#d6a6ff'; a.visual = 'singularity';
             l.pierce = 50; l.lineLength = 1100; l.hitWidth = 16;
           } },

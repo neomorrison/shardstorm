@@ -95,6 +95,15 @@ export function hasTargetingAttack(stats) {
 
 // ---- UI ---------------------------------------------------------------------------------
 
+// Shown once per run when one of these leaks (the first Iron wave is built to be survivable,
+// so this is the moment to point at the missing damage type).
+const LEAK_HINTS = {
+  iron: 'An Iron Meteor reached the Core. KINETIC damage cannot crack Iron: add a Missile Pod, Orbital Mortar, Tesla Coil, Laser Array or Cryo Emitter.',
+  magma: 'A Magma Meteor reached the Core. BLAST damage cannot hurt Magma: mix in another damage type.',
+  prism: 'A Prism Meteor reached the Core. It ignores THERMAL and ENERGY: KINETIC, BLAST or CRYO will crack it.',
+  specter: 'A Specter reached the Core. It is Phantom and ignores KINETIC and BLAST: it needs detection plus THERMAL, ENERGY, CRYO or VOID damage.',
+};
+
 export class UI {
   /**
    * @param {object} game  the client controller (src/main.js): data, icons, settings, commands
@@ -1037,6 +1046,16 @@ export class UI {
 
   // ======================================================================= events
 
+  // One teaching hint per run the first time an enemy leaks because of its immunities.
+  _leakHint(type) {
+    const hint = LEAK_HINTS[type];
+    if (!hint || !this.sim || this.game.over) return;
+    if (this._hintSim !== this.sim) { this._hintSim = this.sim; this._hintsShown = new Set(); }
+    if (this._hintsShown.has(type)) return;
+    this._hintsShown.add(type);
+    this.toast(hint, 'tip', 9000);
+  }
+
   onEvents(events) {
     for (let i = 0; i < events.length; i++) {
       const e = events[i];
@@ -1072,6 +1091,7 @@ export class UI {
           break;
         }
         case 'leak': {
+          this._leakHint(e.type);
           const now = performance.now();
           if (now - this._lastLeakFlash > 120) {
             this._lastLeakFlash = now;
@@ -1273,7 +1293,7 @@ export class UI {
     const merged = new Map();
     for (const g of list) {
       const mods = g.mods || {};
-      const k = `${g.type}|${mods.phantom ? 1 : 0}${mods.nanite ? 1 : 0}${mods.plated ? 1 : 0}`;
+      const k = `${g.type}|${mods.phantom ? 1 : 0}${mods.nanite ? 1 : 0}${mods.plated ? 1 : 0}${mods.scout ? 1 : 0}`;
       const m = merged.get(k);
       if (m) m.count += g.count || 0;
       else merged.set(k, { type: g.type, count: g.count || 0, mods });
@@ -1293,7 +1313,7 @@ export class UI {
       const seen = this._seen || new Set();
       const fresh = w > 1 && (!seen.has(g.type) || (g.mods.phantom && !seen.has('mod:phantom')) || (g.mods.nanite && !seen.has('mod:nanite')) || (g.mods.plated && !seen.has('mod:plated')));
       const d = el('div', `pv${fresh ? ' pv--new' : ''}`);
-      d.title = `${g.count} ${name}${g.mods.phantom ? ', Phantom' : ''}${g.mods.nanite ? ', Nanite' : ''}${g.mods.plated ? ', Plated' : ''}${fresh ? '. New threat' : ''}`;
+      d.title = `${g.count} ${name}${g.mods.phantom ? ', Phantom' : ''}${g.mods.nanite ? ', Nanite' : ''}${g.mods.plated ? ', Plated' : ''}${g.mods.scout ? ', Scout (empty hold, light hull)' : ''}${fresh ? '. New threat' : ''}`;
       d.innerHTML = `<canvas></canvas><span class="pv__n">${short(g.count)}</span>${badges ? `<span class="pv__mods">${badges}</span>` : ''}${fresh ? '<span class="pv__new">New</span>' : ''}`;
       this.game.icons.enemy(d.querySelector('canvas'), g.type, 30, g.mods);
       frag.appendChild(d);

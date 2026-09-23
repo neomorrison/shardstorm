@@ -12,22 +12,28 @@ export const RIG_CAP = 10;             // max Mining Rigs alive at once
 
 // Shell bounty multiplier c(w)
 export const C_START = 50;
-export const C_EXP = 2;
+export const C_EXP = 3;
 export function incomeFactor(w) {
   return w <= C_START ? 1 : Math.pow(C_START / w, C_EXP);
 }
 
-// Wave clear bonus
+// Wave clear bonus: a flat 200 plus the wave number. It matters most in the first twenty waves,
+// where it funds the second and third tower (docs/ECONOMY.md 1.2).
+export const WAVE_BONUS_BASE = 200;
 export function waveBonus(w) {
-  return 100 + w;
+  return WAVE_BONUS_BASE + w;
 }
 
 // Threat budget B(w) (mass per wave)
 export const B_A = 19, B_P = 0.81, B_G = 1.0514;
-export const K_SURGE = 0.0007, SURGE_START = 80;
+// The surge makes log B(w) grow quadratically from SURGE_START (the storm always wins). After
+// SURGE_CAP more waves it continues along its tangent (constant growth) only so that every number
+// stays finite far past any run: budget(1000) is about 3e271 instead of Infinity.
+export const K_SURGE = 0.0032, SURGE_START = 65, SURGE_CAP = 100;
 export function surge(w) {
   const x = Math.max(0, w - SURGE_START);
-  return Math.exp(K_SURGE * x * x);
+  const e = x <= SURGE_CAP ? K_SURGE * x * x : K_SURGE * SURGE_CAP * (2 * x - SURGE_CAP);
+  return Math.exp(e);
 }
 export function budget(w) {
   return B_A * Math.pow(w, B_P) * Math.pow(B_G, w) * surge(w);
@@ -48,14 +54,19 @@ export const MAX_SPAWNS_PER_WAVE = 300;
 
 // Storm Titans
 export const TITAN_EVERY = 20;
-// Titan hull HP tracks the threat budget of its wave, times a factor that grows with the
-// square root of the tier, so each Titan is a slightly stiffer single-target check than the
-// last (wave 20: about 410 HP, wave 40: 2.8k, wave 60: 12.8k, wave 80: 51k, wave 100: 247k).
-// The hull multiplier H is already part of budget(w), so it is not applied again.
+// Titan hull HP tracks the base threat trend of its wave (budget without the surge) times the
+// square root of the surge, times a factor that grows with the square root of the tier. The
+// surge is flood pressure; the Titan rises with it more slowly, so it stays a single-target
+// check that a prepared defense can pass instead of a wall that ends every run on one wave
+// (wave 20: about 410 HP, wave 40: 2.8k, wave 60: 12.8k, wave 80: 73k, wave 100: 1.33M).
+// The hull multiplier H only exists inside budget(w), so it is not applied again.
 export const TITAN_K = 0.7;
+export const TITAN_SURGE_EXP = 0.5;
 export function titanHp(tier) {
   const t = Math.max(1, tier);
-  return Math.max(100, Math.round(TITAN_K * Math.sqrt(t) * budget(TITAN_EVERY * t) / 10) * 10);
+  const w = TITAN_EVERY * t;
+  const hp = TITAN_K * Math.sqrt(t) * budget(w) / Math.pow(surge(w), 1 - TITAN_SURGE_EXP);
+  return Math.max(100, Math.round(hp / 10) * 10);
 }
 
 // Commander XP
@@ -84,3 +95,7 @@ export function priceFor(base, difficultyId) {
 export const ETA0 = 10;
 export const TIER_EFFICIENCY = [1.0, 1.05, 1.12, 1.3, 1.6, 2.5];
 export const EFFICIENCY_TOLERANCE = 0.35;
+// A global-range tower (Rail Sniper) applies its ship damage over the whole channel, 8 to 10
+// times the stretch one bench tower covers, so on SHIP it is graded against this fraction of
+// the target (docs/ECONOMY.md 3.2).
+export const GLOBAL_SHIP_FACTOR = 0.7;

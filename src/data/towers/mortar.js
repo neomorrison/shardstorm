@@ -3,7 +3,7 @@
 //   T1 260..780, T2 520..1625, T3 1300..5200, T4 5200..19500, T5 26000..97500.
 //
 // The main attack is the engine's `mortar` kind (aim = tower.aim, default the nearest channel
-// point). Burning ground (Incendiary T3+) and Doomsday aftershocks come from a `custom` attack
+// point). Burning ground (Incendiary T3+) and aftershocks (Big Shell T4+) come from a `custom` attack
 // ("fx") that runs right after `main` in the same tick: it spots the shells `main` just fired
 // (the tail of sim.state.projectiles, still at prog 0) and acts where they land. Its state lives
 // in tower.data._field_* so the engine clears it with the rest of the field state when a wave
@@ -225,7 +225,7 @@ export default {
     targetModes: ['manual'],  // aims at tower.aim, never at enemies
     attacks: {
       main: {
-        kind: 'mortar', cooldown: 1.35, dtype: 'BLAST', count: 1,
+        kind: 'mortar', cooldown: 1.2, dtype: 'BLAST', count: 1,
         inaccuracy: 28, flightTime: 0.9, arc: 150, projRadius: 8,
         splash: { radius: 54, damage: 1, pierce: 24 },
         visual: 'shell', color: '#ff5d5d',
@@ -239,29 +239,32 @@ export default {
     {
       name: 'Big Shell',
       upgrades: [
-        { name: 'Heavy Shells', cost: 340, desc: 'Explosions are 30% wider and hit up to 32 meteors.',
-          apply(s) { const sp = splash(s); sp.radius += 16; sp.pierce += 8; } },
-        { name: 'Dense Charge', cost: 700, desc: 'Explosions deal 2 damage and hit up to 40 meteors.',
-          apply(s) { const sp = splash(s); sp.damage += 1; sp.pierce += 8; } },
-        { name: 'Siege Shells', cost: 2500, desc: 'Fires huge siege shells that deal 4 damage (12 to ships) to up to 50 meteors in a bigger blast.',
+        { name: 'Heavy Shells', cost: 480, desc: 'Explosions are 15% wider, deal 2 damage and hit up to 32 meteors.',
+          apply(s) { const sp = splash(s); sp.radius += 8; sp.pierce += 8; sp.damage += 1; } },
+        { name: 'Dense Charge', cost: 520, desc: 'Blasts grow another 15% wider, deal 4 damage (6 to ships) and hit up to 40 meteors.',
+          apply(s) { const sp = splash(s); sp.damage += 2; sp.radius += 8; sp.pierce += 8; sp.shipDamage = (sp.shipDamage || 0) + 2; } },
+        { name: 'Siege Shells', cost: 2000, desc: 'Fires huge siege shells that deal 7 damage (20 to ships) to up to 50 meteors in a bigger blast.',
           apply(s) {
             const a = main(s), sp = a.splash;
-            sp.damage += 2; sp.radius += 14; sp.pierce += 10; sp.shipDamage = (sp.shipDamage || 0) + 8;
+            sp.damage += 3; sp.radius += 14; sp.pierce += 10; sp.shipDamage = (sp.shipDamage || 0) + 11;
             a.scale = 1.6; a.projRadius = 9; a.arc = 210; a.color = '#ff9f43'; a.inaccuracy *= 0.85;
           } },
-        { name: 'Tectonic Charge', cost: 8200, desc: 'Blasts deal 10 damage (40 to ships), hit up to 100 meteors and stun them for 0.4 s.',
+        { name: 'Tectonic Charge', cost: 6500, desc: 'Blasts deal 14 damage (56 to ships), hit up to 100 meteors, stun them for 0.4 s and set off 3 aftershocks.',
           apply(s) {
             const a = main(s), sp = a.splash;
-            sp.damage += 6; sp.radius += 26; sp.pierce += 50; sp.shipDamage = (sp.shipDamage || 0) + 22;
+            sp.damage += 7; sp.radius += 26; sp.pierce += 50; sp.shipDamage = (sp.shipDamage || 0) + 29;
             addOnHit(sp, { stun: { t: 0.4, shipT: 0 } });
             a.scale = 1.9; a.arc = 260; a.color = '#ff7a1a';
+            const f = fx(s);
+            f.aftershocks = 3; f.aftershockRadius = 50; f.aftershockDamage = 7; f.aftershockShip = 20;
           } },
-        { name: 'Doomsday Battery', cost: 38000, desc: 'Doomsday shells deal 40 damage (230 to ships) in enormous blasts that ignore BLAST immunity and set off 6 aftershocks.',
+        { name: 'Doomsday Battery', cost: 26000, desc: 'Fires 3 doomsday shells per volley that deal 40 damage (200 to ships) in enormous blasts, ignore BLAST immunity and set off 6 aftershocks each.',
           apply(s) {
             const a = main(s), sp = a.splash;
-            sp.damage += 30; sp.radius += 64; sp.pierce += 200; sp.shipDamage = (sp.shipDamage || 0) + 160;
+            sp.damage += 26; sp.radius += 64; sp.pierce += 200; sp.shipDamage = (sp.shipDamage || 0) + 118;
             addOnHit(sp, { stun: { t: 1, shipT: 0.3 } });
             a.bypass = [...(a.bypass || []), 'BLAST'];
+            a.count = Math.max(3, a.count || 1);
             a.scale = 2; a.projRadius = 10; a.arc = 300; a.flightTime += 0.25; a.color = '#fff3b0';
             const f = fx(s);
             f.aftershocks = 6; f.aftershockRadius = 70; f.aftershockDamage = 15; f.aftershockShip = 45;
@@ -274,58 +277,58 @@ export default {
       upgrades: [
         { name: 'Hot Shells', cost: 330, desc: 'Explosions ignite meteors for 1 extra THERMAL damage over 1 s.',
           apply(s) { addOnHit(splash(s), { burn: { dps: 1, t: 1 } }); } },
-        { name: 'Thermite Fill', cost: 620, desc: 'Burn deals 2 damage per second for 1.5 s, and explosions are 15% wider.',
+        { name: 'Thermite Fill', cost: 700, desc: 'Burn deals 2 damage per second for 1.5 s, and explosions are 15% wider.',
           apply(s) { const sp = splash(s); sp.onHit.burn = { dps: 2, t: 1.5 }; sp.radius += 8; } },
-        { name: 'Napalm Shells', cost: 2000, desc: 'Shells leave burning ground for 3 s that ignites up to 10 meteors at a time for 2 THERMAL damage per second, Magma included.',
+        { name: 'Napalm Shells', cost: 1600, desc: 'Shells leave burning ground for 3 s that ignites up to 10 meteors at a time for 3 THERMAL damage per second, Magma included.',
           apply(s) {
             const a = main(s);
             a.color = '#ff7a1a';
             const f = fx(s);
-            f.patchTime = 3; f.patchScale = 0.85; f.patchDps = 2; f.patchBurnT = 1; f.patchMax = 10;
+            f.patchTime = 3; f.patchScale = 0.85; f.patchDps = 3; f.patchBurnT = 1; f.patchMax = 10;
           } },
-        { name: 'Inferno Rounds', cost: 7400, desc: 'Blasts deal 2 damage and burn for 4 per second over 2 s; burning ground lasts 4 s, spreads 30% wider and ignites up to 16 meteors.',
+        { name: 'Inferno Rounds', cost: 5800, desc: 'Blasts deal 2 damage and burn for 5 per second over 2 s; burning ground lasts 4 s, spreads 30% wider and ignites up to 16 meteors.',
           apply(s) {
             const a = main(s), sp = a.splash;
             sp.damage += 1;
-            sp.onHit.burn = { dps: 4, t: 2 };
+            sp.onHit.burn = { dps: 5, t: 2 };
             a.color = '#ff4d1a'; a.scale = Math.max(a.scale || 1, 1.2);
             const f = fx(s);
-            f.patchTime = 4; f.patchScale = 1.1; f.patchDps = 4; f.patchBurnT = 2; f.patchMax = 16;
+            f.patchTime = 4; f.patchScale = 1.1; f.patchDps = 5; f.patchBurnT = 2; f.patchMax = 16;
           } },
-        { name: 'Firestorm', cost: 32000, desc: 'Fires 2 shells per volley 67% faster for 6 damage (30 to ships); burning ground lasts 6 s and burns up to 40 meteors for 16 per second.',
+        { name: 'Firestorm', cost: 26000, desc: 'Fires 3 shells per volley twice as fast for 6 damage (40 to ships); burning ground lasts 6 s and burns up to 40 meteors for 20 per second.',
           apply(s) {
             const a = main(s), sp = a.splash;
-            sp.damage += 4; sp.shipDamage = (sp.shipDamage || 0) + 24;
-            sp.onHit.burn = { dps: 16, t: 2.5 };
-            a.count = Math.max(2, a.count || 1); a.cooldown *= 0.6; a.inaccuracy += 16;
+            sp.damage += 4; sp.shipDamage = (sp.shipDamage || 0) + 34;
+            sp.onHit.burn = { dps: 20, t: 2.5 };
+            a.count = Math.max(3, a.count || 1); a.cooldown *= 0.5; a.inaccuracy += 16;
             a.color = '#ffe14d'; a.scale = Math.max(a.scale || 1, 1.35);
             const f = fx(s);
-            f.patchTime = 6; f.patchScale = 1.2; f.patchDps = 16; f.patchBurnT = 2.5; f.patchMax = 40;
+            f.patchTime = 6; f.patchScale = 1.2; f.patchDps = 20; f.patchBurnT = 2.5; f.patchMax = 40;
           } },
       ],
     },
     {
       name: 'Rapid',
       upgrades: [
-        { name: 'Quick Loader', cost: 300, desc: 'Fires 33% faster.',
-          apply(s) { main(s).cooldown *= 0.75; } },
-        { name: 'Fast Fuse', cost: 560, desc: 'Shells land 40% sooner and fire 43% faster.',
-          apply(s) { const a = main(s); a.flightTime *= 0.6; a.cooldown *= 0.7; a.arc = 110; } },
-        { name: 'Shock Shells', cost: 2000, desc: 'Fires 2 shells per volley for 2 damage each, and every blast stuns meteors for 0.5 s.',
+        { name: 'Quick Loader', cost: 260, desc: 'Fires 25% faster.',
+          apply(s) { main(s).cooldown *= 0.8; } },
+        { name: 'Fast Fuse', cost: 520, desc: 'Shells land 40% sooner, fire 33% faster and deal 2 damage.',
+          apply(s) { const a = main(s); a.flightTime *= 0.6; a.cooldown *= 0.75; a.arc = 110; a.splash.damage += 1; } },
+        { name: 'Shock Shells', cost: 1300, desc: 'Fires 2 shells per volley for 3 damage each, and every blast stuns meteors for 0.5 s.',
           apply(s) {
             const a = main(s);
-            a.count = Math.max(2, a.count || 1); a.inaccuracy += 8; a.scale = 0.9; a.color = '#7fe9ff';
+            a.count = Math.max(2, a.count || 1); a.inaccuracy += 14; a.scale = 0.9; a.color = '#7fe9ff';
             a.splash.damage += 1;
             addOnHit(a.splash, { stun: { t: 0.5, shipT: 0 } });
           } },
-        { name: 'Autoloader', cost: 7000, desc: 'Fires 3 shells per volley 43% faster; blasts deal 3 damage and stun ships for 0.25 s.',
+        { name: 'Autoloader', cost: 5600, desc: 'Fires 3 shells per volley 43% faster; blasts deal 4 damage and stun ships for 0.25 s.',
           apply(s) {
             const a = main(s), sp = a.splash;
             a.count = Math.max(3, a.count || 1); a.cooldown *= 0.7;
             sp.damage += 1;
             addOnHit(sp, { stun: { t: 0.5, shipT: 0.25 } });
           } },
-        { name: 'Barrage Command', cost: 34000, desc: 'Fires 4 shells per volley 67% faster for 6 damage each (26 to ships). Unlocks Barrage: 40 shells rain on the strongest ship.',
+        { name: 'Barrage Command', cost: 27000, desc: 'Fires 4 shells per volley 67% faster for 7 damage each (27 to ships). Unlocks Barrage: 40 shells rain on the strongest ship.',
           apply(s) {
             const a = main(s), sp = a.splash;
             a.count = Math.max(4, a.count || 1); a.cooldown *= 0.6; a.color = '#ffd23d';

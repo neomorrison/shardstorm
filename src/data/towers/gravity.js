@@ -310,7 +310,7 @@ export default {
   cost: 400,
   radius: 22,
   blurb: 'Slows everything in its field.',
-  desc: 'Bends gravity so meteors in its field move 40% slower (ships 15% slower). Deals no damage until upgraded.',
+  desc: 'Bends gravity so meteors in its field move 40% slower (ships 15% slower, Storm Titans half as much as ships). Deals no damage until upgraded.',
   art: {
     sprite: 'tower_gravity', rotates: false, color: '#a78bfa', accent: '#e0c3ff', shape: 'circle', barrels: 0,
     variant(levels) { return levels[0] >= 3 ? 1 : levels[1] >= 3 ? 2 : levels[2] >= 3 ? 3 : 0; },
@@ -373,14 +373,14 @@ export default {
             const w = tide(s); w.pull = 70; w.cap = 260; w.surge = 60; w.surgeEvery = 3;
             field(s).color = '#4de8e0';
           } },
-        { name: 'Tidal Lock', cost: 4800, desc: 'Drags ships back 14 units per second (up to 120 each, never Storm Titans) and slows them 25%; meteor pull rises to 100.',
+        { name: 'Tidal Lock', cost: 4800, desc: 'Drags ships back 14 units per second (up to 120 each, never Storm Titans) and slows them 25% (Titans half as much); meteor pull rises to 100.',
           apply(s) {
             const w = tide(s); w.pull = 100; w.cap = 360; w.surge = 80;
             w.shipPull = 14; w.shipCap = 120; w.shipSurge = 25;
             field(s).slow.shipMult = 0.75;
             field(s).color = '#2fd6ff';
           } },
-        { name: 'Rewind Field', cost: 22000, desc: 'Every 2.5 s the field rewinds meteors 180 units (ships 70); it grows 35 wider, slows meteors 55% and pulls up to 700 units each.',
+        { name: 'Rewind Field', cost: 22000, desc: 'Every 2.5 s the field rewinds meteors 180 units (ships 70); it grows 35 wider, slows meteors 55% (ships 35%) and pulls up to 700 units each.',
           apply(s) {
             const w = tide(s); w.pull = 160; w.cap = 700; w.surge = 180; w.surgeEvery = 2.5;
             w.shipPull = 30; w.shipCap = 320; w.shipSurge = 70;

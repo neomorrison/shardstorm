@@ -1,6 +1,6 @@
 // Missile Pod: BLAST splash. Pure data.
-// Prices follow docs/ECONOMY.md 2.4 for base b = 500:
-//   T1 200..600, T2 400..1250, T3 1000..4000, T4 4000..15000, T5 20000..75000.
+// Prices follow docs/ECONOMY.md 2.4 for base b = 460:
+//   T1 184..552, T2 368..1150, T3 920..3680, T4 3680..13800, T5 18400..69000.
 
 const main = (s) => s.attacks.main;
 
@@ -30,7 +30,7 @@ export default {
   id: 'missile',
   name: 'Missile Pod',
   hotkey: 'r',
-  cost: 500,
+  cost: 460,
   radius: 24,
   blurb: 'Missiles that explode on impact.',
   desc: 'Launches BLAST missiles that shatter groups of meteors. Cannot hurt Magma meteors.',
@@ -58,23 +58,23 @@ export default {
     {
       name: 'Heavy Ordnance',
       upgrades: [
-        { name: 'Wide Blast', cost: 280, desc: 'Explosions are 33% wider.',
+        { name: 'Wide Blast', cost: 220, desc: 'Explosions are 33% wider.',
           apply(s) { main(s).splash.radius += 14; } },
-        { name: 'Dense Payload', cost: 520, desc: 'Explosions deal 2 damage and hit up to 22 meteors.',
+        { name: 'Dense Payload', cost: 480, desc: 'Explosions deal 2 damage and hit up to 22 meteors.',
           apply(s) { const sp = main(s).splash; sp.damage += 1; sp.pierce += 8; } },
-        { name: 'Siege Warhead', cost: 1700, desc: 'Warheads deal 4 damage in a bigger blast that stuns meteors for 0.35 s.',
+        { name: 'Siege Warhead', cost: 1300, desc: 'Range +20, and warheads fire 25% faster and deal 4 damage in a bigger blast that stuns meteors for 0.35 s.',
           apply(s) {
             const a = main(s), sp = a.splash;
-            sp.damage += 2; sp.radius += 20; sp.onHit = { ...(sp.onHit || {}), stun: { t: 0.35, shipT: 0 } };
+            a.cooldown *= 0.8; sp.damage += 2; sp.radius += 20; sp.onHit = { ...(sp.onHit || {}), stun: { t: 0.35, shipT: 0 } };
             s.range += 20; a.visual = 'warhead';
           } },
-        { name: 'Thermobaric', cost: 6500, desc: 'Thermobaric blasts deal 10 damage (20 to ships) across a huge radius.',
+        { name: 'Thermobaric', cost: 4500, desc: 'Thermobaric warheads fire 50% faster and deal 10 damage (20 to ships) across a huge radius.',
           apply(s) {
             const a = main(s), sp = a.splash;
-            sp.damage += 6; sp.radius += 24; sp.pierce += 20; sp.shipDamage = (sp.shipDamage || 0) + 10;
+            a.cooldown /= 1.5; sp.damage += 6; sp.radius += 24; sp.pierce += 20; sp.shipDamage = (sp.shipDamage || 0) + 10;
             sp.visual = 'thermobaric'; a.color = '#ff6b3d';
           } },
-        { name: 'Nova Warhead', cost: 36000, desc: 'Nova warheads deal 40 damage (90 to ships) in a massive blast that stuns everything it touches.',
+        { name: 'Nova Warhead', cost: 18500, desc: 'Nova warheads fire 25% faster and deal 40 damage (90 to ships) in a massive blast that stuns everything it touches.',
           apply(s) {
             const a = main(s), sp = a.splash;
             sp.damage += 30; sp.radius += 60; sp.pierce += 60; sp.shipDamage = (sp.shipDamage || 0) + 40;
@@ -86,9 +86,9 @@ export default {
     {
       name: 'Cluster',
       upgrades: [
-        { name: 'Quick Loader', cost: 300, desc: 'Reloads 25% faster.',
-          apply(s) { main(s).cooldown *= 0.8; } },
-        { name: 'Bomblets', cost: 700, desc: 'Each missile scatters 4 bomblets that explode on their own.',
+        { name: 'Quick Loader', cost: 200, desc: 'Reloads 30% faster.',
+          apply(s) { main(s).cooldown /= 1.3; } },
+        { name: 'Bomblets', cost: 600, desc: 'Each missile scatters 4 bomblets that explode on their own.',
           apply(s) {
             const a = main(s);
             a.split = {
@@ -100,14 +100,14 @@ export default {
             };
             a.splitOn = 'both';
           } },
-        { name: 'Cluster Swarm', cost: 2400, desc: 'Scatters 8 bomblets that deal 2 damage each.',
+        { name: 'Cluster Swarm', cost: 1800, desc: 'Scatters 8 bomblets that deal 2 damage each.',
           apply(s) { const sp = main(s).split; sp.count = 8; sp.attack.splash.damage += 1; } },
-        { name: 'Saturation Pods', cost: 8000, desc: 'Fires 3 cluster missiles per volley, 25% faster.',
-          apply(s) { const a = main(s); a.count = 3; a.spread = 0.45; a.cooldown *= 0.8; a.visual = 'cluster'; } },
-        { name: 'Carpet Barrage', cost: 32000, desc: 'Fires 5 missiles per volley with 12 bomblets each. Unlocks Carpet Barrage: 40 heavy explosions sweep the channel.',
+        { name: 'Saturation Pods', cost: 4200, desc: 'Fires 3 guided cluster missiles per volley, 40% faster.',
+          apply(s) { const a = main(s); a.count = 3; a.spread = 0.45; a.cooldown /= 1.4; a.homing = Math.max(a.homing || 0, 4); a.lifetime *= 1.4; a.visual = 'cluster'; } },
+        { name: 'Carpet Barrage', cost: 24000, desc: 'Fires 5 missiles per volley 40% faster, each with 12 bomblets, and every blast deals 2 more damage. Unlocks Carpet Barrage: 40 heavy explosions sweep the channel.',
           apply(s) {
             const a = main(s);
-            a.count = 5; a.spread = 0.8; a.split.count = 12; a.split.attack.splash.damage += 2; a.splash.damage += 2;
+            a.cooldown /= 1.4; a.count = 5; a.spread = 0.8; a.split.count = 12; a.split.attack.splash.damage += 2; a.splash.damage += 2;
             a.color = '#ffd23d';
             s.abilities.push(carpetBarrage);
           } },
@@ -116,19 +116,19 @@ export default {
     {
       name: 'Hunter-Killer',
       upgrades: [
-        { name: 'Seeker Heads', cost: 240, desc: 'Missiles home in on their targets.',
+        { name: 'Seeker Heads', cost: 220, desc: 'Range +15, and missiles home in on their targets.',
           apply(s) { const a = main(s); a.homing = 5; a.lifetime *= 1.6; s.range += 15; } },
-        { name: 'Target Painter', cost: 450, desc: 'Detection: can target Phantom meteors. Range +45.',
-          apply(s) { s.detection = true; s.range += 45; } },
-        { name: 'Ship Buster', cost: 2200, desc: 'Missiles hit their target for 2 damage, plus 14 more to ships.',
-          apply(s) { const a = main(s); a.damage += 2; a.shipDamage = (a.shipDamage || 0) + 14; a.speed += 150; a.visual = 'seeker'; } },
-        { name: 'Hull Ripper', cost: 8500, desc: 'Missiles deal 100 extra damage to ships, stun them for 0.4 s and reload 33% faster.',
+        { name: 'Target Painter', cost: 400, desc: 'Detection: can target Phantom meteors, and explosions deal 1 more damage.',
+          apply(s) { s.detection = true; main(s).splash.damage += 1; } },
+        { name: 'Ship Buster', cost: 1500, desc: 'Missiles hit their target for 2 damage, plus 30 more to ships.',
+          apply(s) { const a = main(s); a.damage += 2; a.shipDamage = (a.shipDamage || 0) + 30; a.speed += 150; a.visual = 'seeker'; } },
+        { name: 'Hull Ripper', cost: 7000, desc: 'Missiles deal 100 extra damage to ships, stun them for 0.4 s and reload 33% faster.',
           apply(s) {
             const a = main(s);
-            a.shipDamage = (a.shipDamage || 0) + 86; a.onHit = { ...(a.onHit || {}), stun: { t: 0, shipT: 0.4 } };
+            a.shipDamage = (a.shipDamage || 0) + 70; a.onHit = { ...(a.onHit || {}), stun: { t: 0, shipT: 0.4 } };
             a.cooldown *= 0.75; a.speed += 250; a.color = '#ff5d73';
           } },
-        { name: 'Titan Breaker', cost: 45000, desc: 'Twin missiles each deal 500 damage to ships and 1000 to Storm Titans, stunning ships for 1 s.',
+        { name: 'Titan Breaker', cost: 40000, desc: 'Twin missiles each deal 500 damage to ships and 1000 to Storm Titans, stunning ships for 1 s.',
           apply(s) {
             const a = main(s);
             a.count = Math.max(2, a.count || 1); a.spread = Math.max(a.spread || 0, 0.3);

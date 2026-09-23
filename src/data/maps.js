@@ -61,6 +61,8 @@ export const MAPS = {
     palette: { ground: '#3a4650', ground2: '#242d34', channel: '#12171b', edge: '#8fd0c9', glow: 'rgba(143,208,201,0.28)', accent: '#f4d35e' },
     pathWidth: 56,
     lanes: 'merge',
+    // two lanes until the merge split a young defense: early waves arrive 20% slower (Sim.paceAt)
+    pace: { mult: 1.2, until: 30, fade: 10 },
     paths: [
       [[-80, 150], [150, 140], [360, 220], [200, 360], [430, 420], [660, 280], [500, 130], [760, 100], [970, 210], [810, 390], [750, 520],
         [950, 480], [1120, 540], [1300, 470], [1420, 500]],
@@ -87,16 +89,21 @@ export const MAPS = {
     palette: { ground: '#3a1d18', ground2: '#24110e', channel: '#160a08', edge: '#ff7a3c', glow: 'rgba(255,122,60,0.30)', accent: '#ffb14e' },
     pathWidth: 56,
     lanes: 'alternate',
+    // two separate lanes split every defense: waves up to 35 arrive 40% slower (Sim.paceAt)
+    pace: { mult: 1.4, until: 35, fade: 10 },
+    // The east rift opens gradually: every spawn uses the west lane before wave 10, then the
+    // east lane's share ramps to an even split by wave 20 (Sim._rampLanes).
+    laneOpen: { wave: 10, full: 20, tip: 'The east rift is opening: meteors now arrive from both edges. Build a second defense.' },
     paths: [
-      [[-146, 100], [102, 90], [329, 176], [156, 327], [404, 392], [653, 241], [480, 79], [765, 65], [988, 165], [815, 360], [750, 500]],
-      [[1646, 900], [1398, 910], [1171, 824], [1344, 673], [1096, 608], [847, 759], [1020, 921], [735, 935], [512, 835], [685, 640], [750, 500]],
+      [[-146,100], [102,90], [329,176], [156,327], [404,392], [653,241], [480,79], [765,65], [988,120], [1150,150], [1230,300], [1080,380], [900,360], [750,500]],
+      [[1646,900], [1398,910], [1171,824], [1344,673], [1096,608], [847,759], [1020,921], [735,935], [512,880], [350,850], [270,700], [420,620], [600,640], [750,500]],
     ],
     core: { x: 750, y: 500 },
     blockers: [
-      { x: 300, y: 620, r: 46, kind: 'vent' },
-      { x: 1150, y: 380, r: 46, kind: 'vent' },
-      { x: 350, y: 720, r: 40, kind: 'rock' },
-      { x: 1120, y: 100, r: 40, kind: 'rock' },
+      { x: 1340, y: 340, r: 46, kind: 'vent' },
+      { x: 160, y: 660, r: 46, kind: 'vent' },
+      { x: 1390, y: 110, r: 40, kind: 'rock' },
+      { x: 110, y: 890, r: 40, kind: 'rock' },
     ],
     props: [],
   },

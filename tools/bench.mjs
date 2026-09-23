@@ -31,7 +31,7 @@ import { MAPS } from '../src/data/maps.js';
 import { ENEMIES } from '../src/data/enemies.js';
 import { TOWERS, TOWER_LIST } from '../src/data/towers/index.js';
 import { computeBaseStats, finalizeStats } from '../src/sim/towers.js';
-import { priceFor, ETA0, TIER_EFFICIENCY, EFFICIENCY_TOLERANCE } from '../src/data/economy.js';
+import { priceFor, ETA0, TIER_EFFICIENCY, EFFICIENCY_TOLERANCE, GLOBAL_SHIP_FACTOR } from '../src/data/economy.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const TICK = 1 / 60;
@@ -231,6 +231,11 @@ const SCENARIOS = {
   // MIXED: the five real Iron/Magma/Comet/Prism/Geode meteors, cycled, testing damage-type
   // coverage (each is immune to at least one dtype).
   MIXED: { targetN: 8, pick: (i) => MIXED_CYCLE[i % MIXED_CYCLE.length] },
+  // Crowd streams (graded only where PATH_SECONDARY names them): the same Rose stream at 2x and
+  // 4x the SWARM population. An aimed mortar shell or a Nova-sized blast is limited by how
+  // many meteors are under it, and late waves are far denser than 12 Roses per window.
+  SWARM2X: { targetN: 24, pick: () => 'rose' },
+  SWARM4X: { targetN: 48, pick: () => 'rose' },
   // Optional (--phantom): SWARM but every enemy is Phantom, testing detection coverage.
   SWARM_PHANTOM: { targetN: 12, pick: () => 'rose', phantom: true },
 };
@@ -254,6 +259,33 @@ const PRIMARY = {
   rig:     { primary: [], secondary: [], kind: 'income' },
   beacon:  { primary: [], secondary: [], kind: 'support' },
 };
+
+// Path-specific graded secondaries (docs/ECONOMY.md 3.2, the entries with a path in brackets):
+// a config whose highest path is `path` at tier >= `from` is also graded on `scen`. Ship towers
+// (Marksman, Hunter-Killer, Overload, Bomber, Solar Flare) and the Starlance pierce T5 are built
+// for a different target than their tower's primary stream.
+const PATH_SECONDARY = {
+  pulse:   [{ path: 2, from: 3, scen: 'SHIP' }, { path: 0, from: 5, scen: 'DENSE' }],
+  scatter: [{ path: 1, from: 5, scen: 'SHIP' }],
+  missile: [{ path: 2, from: 3, scen: 'SHIP' }, { path: 0, from: 5, scen: 'SWARM4X' }],
+  mortar:  [{ path: -1, from: 4, scen: 'SWARM2X' }, { path: -1, from: 5, scen: 'SWARM4X' }, { path: 0, from: 5, scen: 'SHIP' }],
+  tesla:   [{ path: 2, from: 3, scen: 'SHIP' }],
+  drone:   [{ path: 1, from: 1, scen: 'SHIP' }],
+};
+// Highest path of a config (ties go to the lower path index) and its tier.
+function dominantPath(levels) {
+  let p = 0;
+  for (let i = 1; i < 3; i++) if (levels[i] > levels[p]) p = i;
+  return { path: p, tier: levels[p] };
+}
+// Scenarios a config is graded on: the tower's primaries plus a matching path secondary.
+function gradedScenarios(type, levels) {
+  const meta = PRIMARY[type] || { primary: [] };
+  const out = meta.primary.slice();
+  const dp = dominantPath(levels);
+  for (const e of PATH_SECONDARY[type] || []) if ((e.path < 0 || dp.path === e.path) && dp.tier >= e.from && out.indexOf(e.scen) < 0) out.push(e.scen);
+  return out;
+}
 
 // ============================================================================================
 // Config set: 0-0-0, each single path 1..5, and a representative set of crosspaths.
@@ -280,7 +312,10 @@ function benchDamageTower(type, configs, opts) {
   for (const levels of configs) {
     const totalCost = totalCostFor(def, levels);
     const mds = {};
-    for (const scen of scenarios) {
+    // graded crowd/path scenarios run even when the caller asked only for the core four
+    const runList = scenarios.slice();
+    if (!opts.onlyListed) for (const g of gradedScenarios(type, levels)) if (runList.indexOf(g) < 0 && (g === 'SWARM2X' || g === 'SWARM4X')) runList.push(g);
+    for (const scen of runList) {
       const scenDef = SCENARIOS[scen];
       const sim = newArenaSim(opts.seed);
       const tower = placeConfigured(sim, type, levels, MAIN_TOWER_X, towerY(def));
@@ -288,15 +323,22 @@ function benchDamageTower(type, configs, opts) {
     }
     const highestTier = Math.max(...levels);
     const target = ETA0 * TIER_EFFICIENCY[highestTier];
-    const primaryRan = meta.primary.filter((s) => mds[s] !== undefined);
-    let bestEta = null, status = 'INFO';
+    const primaryRan = gradedScenarios(type, levels).filter((s) => mds[s] !== undefined);
+    let bestEta = null, status = 'INFO', gradedOn = null;
     if (def.stub) status = 'STUB';
     else if (primaryRan.length) {
-      bestEta = Math.max(...primaryRan.map((s) => (mds[s] / totalCost) * 1000));
+      bestEta = -Infinity;
+      // global-range towers are graded on SHIP against GLOBAL_SHIP_FACTOR x target; the graded
+      // eta is normalised back to the plain target so every row compares with `target`
+      const globalShip = def.base && def.base.range === Infinity;
+      for (const s of primaryRan) {
+        const e = (mds[s] / totalCost) * 1000 / (globalShip && s === 'SHIP' ? GLOBAL_SHIP_FACTOR : 1);
+        if (e > bestEta) { bestEta = e; gradedOn = s + (globalShip && s === 'SHIP' ? '/global' : ''); }
+      }
       const lo = target * (1 - EFFICIENCY_TOLERANCE), hi = target * (1 + EFFICIENCY_TOLERANCE);
       status = bestEta < lo ? 'LOW' : bestEta > hi ? 'HIGH' : 'PASS';
     }
-    rows.push({ type, levels, totalCost, mds, highestTier, target, bestEta, status });
+    rows.push({ type, levels, totalCost, mds, highestTier, target, bestEta, gradedOn, status });
   }
   return rows;
 }
@@ -466,7 +508,7 @@ function printDamageTable(type, rows, scenarios) {
   for (const r of rows) {
     let line = pad(cfgLabel(r.levels), 9) + padL(Math.round(r.totalCost), 8);
     for (const s of scenarios) line += padL(fmt(r.mds[s]), 10);
-    line += padL(r.bestEta === null ? '-' : fmt(r.bestEta), 8) + padL(fmt(r.target), 8) + '  ' + r.status;
+    line += padL(r.bestEta === null ? '-' : fmt(r.bestEta), 8) + padL(fmt(r.target), 8) + '  ' + r.status + (r.gradedOn ? ' (' + r.gradedOn + ')' : '');
     console.log('  ' + line);
   }
 }
@@ -572,4 +614,4 @@ if (isMain) {
   }
 }
 
-export { benchDamageTower, benchUtilityTower, benchBeacon, benchRig, selfTest, DEFAULT_CONFIGS, SCENARIOS, PRIMARY, runAdaptiveMulti, windowFor, newArenaSim, placeConfigured, towerY, totalCostFor, MAIN_TOWER_X };
+export { gradedScenarios, PATH_SECONDARY, CORE_SCENARIOS, benchDamageTower, benchUtilityTower, benchBeacon, benchRig, selfTest, DEFAULT_CONFIGS, SCENARIOS, PRIMARY, runAdaptiveMulti, windowFor, newArenaSim, placeConfigured, towerY, totalCostFor, MAIN_TOWER_X };

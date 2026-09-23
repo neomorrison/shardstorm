@@ -1,6 +1,6 @@
 // Enemies: spawning, movement, statuses, damage and popping into children, nanite regrow,
 // leaks and Storm Titans. Pure. All functions take the Sim as the first argument.
-import { ENEMIES, REGROW_UP, GRADE, familyMass } from '../data/enemies.js';
+import { ENEMIES, REGROW_UP, GRADE, familyMass, SCOUT_HULL } from '../data/enemies.js';
 import { BASE_SPEED, incomeFactor } from '../data/economy.js';
 
 export const REGROW_DELAY = 3;          // seconds without damage before a nanite regrows
@@ -8,16 +8,30 @@ export const BURN_TICK = 0.5;           // seconds between burn ticks
 export const SHIP_FREEZE_SLOW = 0.6;    // freeze on a ship becomes this slow
 export const AEGIS_SHIELD_FRAC = 0.25;
 export const AEGIS_REGEN_DELAY = 8;
+// KINETIC hits on the Aegis shield deal this fraction of their damage (other types deal full
+// damage), so an all-KINETIC defense is slowed down by the shield rather than walled.
+export const AEGIS_KINETIC_MULT = 0.2;
 export const RIFT_THRESHOLDS = [0.75, 0.5, 0.25];
 export const RIFT_BLINK = 250;
 export const RIFT_STUN_RADIUS = 150;
 export const RIFT_STUN_TIME = 1.5;
 export const MAW_SPIT_EVERY = 3.2;
+// Bounty is paid once per shell the storm actually sent (docs/ECONOMY.md 1.1). Two things can
+// create shells on the field: nanite regrowth and the Maw's spit. Both are tracked with
+// `e.owed`, the number of shells of an enemy's family that still pay bounty (-1: untracked,
+// the whole family pays as usual). Regrown shells and their children pay nothing, and the Maw
+// pays for the volleys of one unslowed crossing of its channel, so a stalled or looped enemy
+// can never farm credits (out/exploits/regrow_farm.mjs, out/exploits/maw_farm.mjs).
+// Ships (Storm Titans included) cannot be stunned again for this long after a stun ends, and a
+// stun never extends one already running on a ship. Stacked stuns therefore hold a ship still
+// for at most stun / (stun + SHIP_STUN_IMMUNE) of the time, so massed stunners cannot stall a
+// wave forever (docs/BALANCE.md, termination).
+export const SHIP_STUN_IMMUNE = 1.0;
 const MAW_SPIT_TYPES = ['rose', 'iron', 'geode', 'aurora', 'obsidian'];
 
 export const TITAN_KINDS = {
   maw:   { name: 'The Maw',   title: 'Storm Titan', trait: 'Spits meteors behind itself.', color: '#ff5d73' },
-  aegis: { name: 'The Aegis', title: 'Storm Titan', trait: 'A regenerating shield that only non-KINETIC damage breaks.', color: '#5dd6ff' },
+  aegis: { name: 'The Aegis', title: 'Storm Titan', trait: 'A regenerating shield that KINETIC damage barely scratches.', color: '#5dd6ff' },
   rift:  { name: 'The Rift',  title: 'Storm Titan', trait: 'Blinks forward at 75%, 50% and 25% hull and stuns nearby towers.', color: '#b36bff' },
 };
 export const TITAN_ORDER = ['maw', 'aegis', 'rift'];
@@ -57,7 +71,8 @@ export function createEnemy(sim, type, o = {}) {
   const ship = def.kind === 'ship';
   const hullMult = o.hullMult ?? 1;
   const plated = !!o.plated;
-  const hp = def.hp * (ship && !def.titan ? hullMult : 1) * (plated ? 2 : 1);
+  const scout = ship && !def.titan && !!o.scout;
+  const hp = def.hp * (ship && !def.titan ? hullMult : 1) * (plated ? 2 : 1) * (scout ? SCOUT_HULL : 1);
   const lane = o.lane ?? 0;
   let origType = o.origType || type;
   if (!ENEMIES[origType] || ENEMIES[origType].kind === 'ship') origType = type;
@@ -77,12 +92,13 @@ export function createEnemy(sim, type, o = {}) {
     plated,
     origType,
     regrowT: 0,
-    slowMult: 1, slowT: 0, frozenT: 0, stunT: 0,
+    slowMult: 1, slowT: 0, frozenT: 0, stunT: 0, stunImmT: 0,
     burn: null, brittle: null, exposedT: 0, exposeMult: 1,
     immuneProj: -1,
     titan: null,
-    ship,
-    childMass: def.titan ? 0 : childMassOf(type, hullMult),
+    ship, scout,
+    childMass: def.titan || scout ? 0 : childMassOf(type, hullMult),
+    owed: o.owed ?? -1,
     bornT: sim.state.time,
     dead: false,
   };
@@ -100,10 +116,13 @@ export function createTitan(sim, spec, { lane = 0, wave, speedMult = 1, d = 0 } 
   const hp = spec.hp;
   const e = createEnemy(sim, 'titan', { def: titanDef(kind, hp), lane, d, wave, speedMult, hullMult: 1 });
   const shield = kind === 'aegis' ? hp * AEGIS_SHIELD_FRAC : 0;
+  // the Maw's paid volleys: as many as it spits crossing its channel once at full speed
+  const path = sim.paths[e.lane] || sim.paths[0];
+  const cross = Math.max(0, path.length - e.d) / Math.max(1e-6, e.def.speed * BASE_SPEED * e.speedMult);
   e.titan = {
     kind, tier, name: TITAN_KINDS[kind].name,
     shield, maxShield: shield, lastHitT: sim.state.time,
-    blinks: 0, spitT: MAW_SPIT_EVERY,
+    blinks: 0, spitT: MAW_SPIT_EVERY, paidVolleys: Math.ceil(cross / MAW_SPIT_EVERY),
   };
   sim.emit({ t: 'titan', name: e.titan.name, kind, wave: e.wave, tier, id: e.id });
   return e;
@@ -147,6 +166,8 @@ export function regrow(sim, e) {
     if (e.hp < e.maxHp) { e.hp = e.maxHp; sim.emit({ t: 'regrow', x: e.x, y: e.y, type: e.type, id: e.id }); }
     return;
   }
+  // the family grows but its bounty does not: it still pays only for the shells it had
+  if (e.owed < 0) e.owed = e.def.shells;
   let next = null;
   const gCur = GRADE[e.type], gOrig = GRADE[e.origType];
   if (gCur && gOrig) {
@@ -167,7 +188,6 @@ export function canDamage(e, dtype, bypass) {
     if (!bypass || (bypass.indexOf(dtype) < 0 && bypass.indexOf(e.type) < 0)) return false;
   }
   if (e.frozenT > 0 && dtype === 'KINETIC' && !(bypass && bypass.indexOf('FROZEN') >= 0)) return false;
-  if (e.titan !== null && e.titan.shield > 0 && dtype === 'KINETIC' && !(bypass && bypass.indexOf('SHIELD') >= 0)) return false;
   return true;
 }
 
@@ -217,8 +237,11 @@ function applyRaw(sim, e, dmg, dtype, src, projId, onHit) {
   if (T !== null) {
     T.lastHitT = sim.state.time;
     if (T.shield > 0) {
-      const s = dmg < T.shield ? dmg : T.shield;
-      T.shield -= s; dmg -= s; dealt += s;
+      // KINETIC damage is cut to AEGIS_KINETIC_MULT against the shield (attacks that bypass
+      // 'SHIELD' hit it at full strength); whatever breaks through goes on to the hull
+      const km = dtype === 'KINETIC' && !(src.bypass && src.bypass.indexOf('SHIELD') >= 0) ? AEGIS_KINETIC_MULT : 1;
+      const s = dmg * km < T.shield ? dmg * km : T.shield;
+      T.shield -= s; dmg -= s / km; dealt += s;
       if (T.shield <= 0) { T.shield = 0; sim.emit({ t: 'shieldBreak', x: e.x, y: e.y, id: e.id }); }
       if (dmg <= 0) { credit(sim, tower, dealt); return dealt; }
     }
@@ -247,14 +270,18 @@ function popEnemy(sim, e, src, projId, over, dtype, onHit) {
   e.hp = 0;
   sim._removeEnemy(e);
   const st = sim.state;
-  const c = incomeFactor(e.wave);
-  st.cash += c;
-  st.stats.cashEarned += c;
+  const tower = src.tower;
+  // a shell created on the field (regrowth, an unpaid Maw volley) pays no bounty, no Refinery
+  // bonus and no Commander XP
+  if (e.owed !== 0) {
+    const c = incomeFactor(e.wave);
+    st.cash += c;
+    st.stats.cashEarned += c;
+    sim._onPop(e, c, tower);
+  }
   st.stats.pops += 1;
   sim._popsThisTick++;
-  const tower = src.tower;
   if (tower) tower.pops += 1;
-  sim._onPop(e, c, tower);
   sim.emit({ t: 'pop', x: e.x, y: e.y, type: e.type, color: e.def.color, ship: e.ship, count: 1, id: e.id, titan: e.titan !== null });
   if (e.titan !== null) {
     sim.emit({ t: 'titanDown', name: e.titan.name, kind: e.titan.kind, x: e.x, y: e.y, wave: e.wave });
@@ -278,12 +305,15 @@ function popEnemy(sim, e, src, projId, over, dtype, onHit) {
 
 export function spawnChildren(sim, e, projId = -1) {
   const def = e.def;
+  if (e.scout) return []; // a scout's hold is empty
   const cm = def.childMods || null;
   let total = 0;
   for (const [, n] of def.children) total += n;
   const spacing = e.ship ? 18 : 7;
   const kids = [];
   let idx = 0;
+  // tracked families hand what they still owe down to their children (this shell took one)
+  let owed = e.owed < 0 ? -1 : Math.max(0, e.owed - 1);
   for (const [c, n] of def.children) {
     const cdef = ENEMIES[c];
     for (let k = 0; k < n; k++) {
@@ -303,6 +333,7 @@ export function spawnChildren(sim, e, projId = -1) {
         off: cdef.kind === 'ship' ? 0 : clampOff(sim, e.off + (sim.rng() - 0.5) * 10),
       });
       if (projId >= 0) kid.immuneProj = projId;
+      if (owed >= 0) { kid.owed = Math.min(owed, cdef.shells); owed -= kid.owed; }
       // inherit statuses (not freeze or stun)
       if (e.slowT > 0) { kid.slowMult = e.slowMult; kid.slowT = e.slowT; }
       if (e.exposedT > 0) { kid.exposedT = e.exposedT; kid.exposeMult = e.exposeMult; }
@@ -360,8 +391,13 @@ export function applyEffects(sim, e, fx, src) {
   if (burn && e.def.immune.indexOf('THERMAL') < 0) addBurn(e, burn, src);
   const stun = fx.stun;
   if (stun) {
-    const t = ship ? (stun.shipT || 0) * (e.titan !== null ? 0.5 : 1) : (stun.t || 0);
-    if (t > e.stunT) e.stunT = t;
+    if (ship) {
+      const t = (stun.shipT || 0) * (e.titan !== null ? 0.5 : 1);
+      if (t > 0 && e.stunT <= 0 && e.stunImmT <= 0) e.stunT = t;
+    } else {
+      const t = stun.t || 0;
+      if (t > e.stunT) e.stunT = t;
+    }
   }
   const br = fx.brittle;
   if (br) {
@@ -410,7 +446,8 @@ export function updateEnemies(sim, dt) {
   for (let i = 0; i < n0; i++) {
     const e = list[i];
     if (e.dead) continue;
-    if (e.stunT > 0) e.stunT -= dt;
+    if (e.stunT > 0) { e.stunT -= dt; if (e.stunT <= 0 && e.ship) e.stunImmT = SHIP_STUN_IMMUNE; }
+    else if (e.stunImmT > 0) e.stunImmT -= dt;
     if (e.frozenT > 0) { e.frozenT -= dt; if (e.frozenT <= 0) { e.frozenT = 0; e._frozeEmit = false; } }
     if (e.slowT > 0) { e.slowT -= dt; if (e.slowT <= 0) { e.slowT = 0; e.slowMult = 1; } }
     if (e.exposedT > 0) { e.exposedT -= dt; if (e.exposedT <= 0) { e.exposedT = 0; e.exposeMult = 1; } }
@@ -475,10 +512,13 @@ function updateTitan(sim, e, dt) {
       T.spitT += MAW_SPIT_EVERY;
       const type = MAW_SPIT_TYPES[Math.min(MAW_SPIT_TYPES.length - 1, T.tier - 1)];
       const count = Math.min(8, 2 + T.tier);
+      // volleys past one full-speed crossing (a slowed or stalled Maw) pay no bounty
+      const paid = T.paidVolleys > 0;
+      if (paid) T.paidVolleys--;
       for (let k = 0; k < count; k++) {
         createEnemy(sim, type, {
           lane: e.lane, d: Math.max(0, e.d - 60 - k * 12), wave: e.wave, speedMult: e.speedMult,
-          hullMult: 1, off: (sim.rng() - 0.5) * sim.map.pathWidth * 0.5,
+          hullMult: 1, off: (sim.rng() - 0.5) * sim.map.pathWidth * 0.5, owed: paid ? -1 : 0,
         });
       }
       sim.emit({ t: 'titanSpit', x: e.x, y: e.y, type, count, id: e.id });

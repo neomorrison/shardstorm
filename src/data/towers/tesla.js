@@ -172,18 +172,18 @@ export default {
     {
       name: 'Chain',
       upgrades: [
-        { name: 'Forked Arcs', cost: 300, desc: 'Arcs jump to 2 more meteors (6 per shot) and reach 15 units farther.',
+        { name: 'Forked Arcs', cost: 250, desc: 'Arcs jump to 2 more meteors (6 per shot) and reach 15 units farther.',
           apply(s) { const a = main(s); a.jumps += 2; a.jumpRange += 15; } },
-        { name: 'High Voltage', cost: 650, desc: 'Arcs deal 2 damage and fire 15% faster.',
+        { name: 'High Voltage', cost: 900, desc: 'Arcs deal 2 damage and fire 15% faster.',
           apply(s) { const a = main(s); a.damage += 1; a.cooldown *= 0.87; } },
-        { name: 'Arc Web', cost: 2300, desc: 'Fires 2 chains per shot, each leaping through up to 10 meteors up to 125 units apart.',
+        { name: 'Arc Web', cost: 1200, desc: 'Fires 2 chains per shot, each leaping through up to 10 meteors up to 125 units apart.',
           apply(s) { const a = main(s); a.count = (a.count || 1) + 1; a.jumps += 4; a.jumpRange += 15; a.color = '#7fe3ff'; a.visual = 'arcweb'; } },
-        { name: 'Tempest Grid', cost: 8000, desc: 'Fires 3 chains per shot, 25% faster, that leap through 15 enemies each for 4 damage (12 to ships). Range and arc reach +20.',
-          apply(s) { const a = main(s); a.count = (a.count || 1) + 1; a.jumps += 5; a.damage += 2; a.shipDamage = (a.shipDamage || 0) + 8; a.cooldown *= 0.8; a.jumpRange += 20; s.range += 20; } },
-        { name: 'Storm Crown', cost: 40000, desc: 'Fires 4 chains per shot, 40% faster, that each leap through 30 enemies for 14 damage (42 to ships). Range +35.',
+        { name: 'Tempest Grid', cost: 7500, desc: 'Chains fire twice as fast and deal 5 damage (15 to ships). Range and arc reach +20.',
+          apply(s) { const a = main(s); a.damage += 3; a.shipDamage = (a.shipDamage || 0) + 10; a.cooldown *= 0.5; a.jumpRange += 20; s.range += 20; } },
+        { name: 'Storm Crown', cost: 25000, desc: 'Chains fire 4 times as fast and deal 8 damage (30 to ships). Range +35.',
           apply(s) {
             const a = main(s);
-            a.count = (a.count || 1) + 1; a.jumps += 15; a.damage += 10; a.shipDamage = (a.shipDamage || 0) + 20; a.cooldown *= 0.7;
+            a.damage += 3; a.shipDamage = (a.shipDamage || 0) + 12; a.cooldown /= 4;
             a.color = '#63d4ff'; a.visual = 'stormcrown';
             s.range += 35;
           } },
@@ -192,11 +192,11 @@ export default {
     {
       name: 'Ball Lightning',
       upgrades: [
-        { name: 'Wide Coil', cost: 280, desc: 'Range +25, and arcs jump to 1 more meteor.',
-          apply(s) { const a = main(s); s.range += 25; a.jumps += 1; } },
-        { name: 'Capacitors', cost: 650, desc: 'Fires 33% faster and arcs deal 2 damage.',
+        { name: 'Wide Coil', cost: 250, desc: 'Range +25, and arcs jump to 2 more meteors.',
+          apply(s) { const a = main(s); s.range += 25; a.jumps += 2; } },
+        { name: 'Capacitors', cost: 1100, desc: 'Fires 33% faster and arcs deal 2 damage.',
           apply(s) { const a = main(s); a.cooldown *= 0.75; a.damage += 1; } },
-        { name: 'Ball Lightning', cost: 2600, desc: 'Every 2 s launches a ball of lightning that rolls up the channel through 40 meteors, zapping 3 nearby meteors (Phantoms too) every 0.3 s.',
+        { name: 'Ball Lightning', cost: 1800, desc: 'Every 2 s launches a ball of lightning that rolls up the channel through 40 meteors, zapping 3 nearby meteors (Phantoms too) every 0.3 s.',
           apply(s) {
             s.attacks.orb = {
               kind: 'projectile', cooldown: 2, damage: 1, pierce: 40, dtype: 'ENERGY', speed: 380, projRadius: 11,
@@ -207,7 +207,7 @@ export default {
               approach: 380, roll: 95, zapEvery: 0.3, zapCount: 3, zapRadius: 75, update: orbUpdate,
             };
           } },
-        { name: 'Plasma Orbs', cost: 9000, desc: 'Orbs launch every second, hit 80 meteors for 2 damage, zap 5 meteors every 0.25 s and can shatter Prism meteors.',
+        { name: 'Plasma Orbs', cost: 7400, desc: 'Orbs launch every second, hit 80 meteors for 2 damage, zap 5 meteors every 0.25 s and can shatter Prism meteors.',
           apply(s) {
             const o = s.attacks.orb, fx = s.attacks.orbfx;
             o.cooldown *= 0.5; o.pierce += 40; o.damage += 1; o.projRadius = 14; o.color = '#d08cff';
@@ -215,7 +215,7 @@ export default {
             fx.damage += 1; fx.zapCount += 2; fx.zapEvery = 0.25;
             fx.bypass = [...(fx.bypass || []), 'prism'];
           } },
-        { name: 'Plasma Tempest', cost: 42000, desc: 'Launches huge plasma orbs every 0.6 s that hit 180 meteors for 5 damage and zap 6 meteors within 150 units.',
+        { name: 'Plasma Tempest', cost: 50000, desc: 'Launches huge plasma orbs every 0.6 s that hit 180 meteors for 5 damage and zap 6 meteors within 150 units.',
           apply(s) {
             const o = s.attacks.orb, fx = s.attacks.orbfx;
             o.cooldown = 0.6; o.pierce += 100; o.damage += 3; o.projRadius = 24; o.lifetime = 7; o.color = '#c070ff'; o.visual = 'plasma orb';
@@ -227,25 +227,25 @@ export default {
     {
       name: 'Overload',
       upgrades: [
-        { name: 'Hot Coils', cost: 300, desc: 'Arcs deal 2 damage.',
+        { name: 'Hot Coils', cost: 450, desc: 'Arcs deal 2 damage.',
           apply(s) { main(s).damage += 1; } },
-        { name: 'Scanner Coil', cost: 650, desc: 'Detection: arcs can target Phantom meteors. Range +20.',
+        { name: 'Scanner Coil', cost: 500, desc: 'Detection: arcs can target Phantom meteors. Range +20.',
           apply(s) { s.detection = true; s.range += 20; } },
-        { name: 'Overload', cost: 2600, desc: 'Arcs become heavy overload bolts that deal 12 damage (40 to ships) to one target and stun it for 0.5 s (ships 0.15 s).',
+        { name: 'Overload', cost: 2400, desc: 'Arcs become heavy overload bolts that deal 12 damage (40 to ships) to one target and stun it for 0.5 s (ships 0.15 s).',
           apply(s) {
             const a = main(s);
             a.jumps = Math.max(0, a.jumps - 3); a.falloff = 0.5; a.damage += 10; a.shipDamage = (a.shipDamage || 0) + 28;
             a.onHit = { ...(a.onHit || {}), stun: { t: 0.5, shipT: 0.15 } };
             a.color = '#ffe14d'; a.visual = 'overload';
           } },
-        { name: 'Thunderstrike', cost: 9500, desc: 'Bolts deal 30 damage (130 to ships), fire 25% faster and stun ships for 0.25 s.',
+        { name: 'Thunderstrike', cost: 8800, desc: 'Bolts deal 30 damage (130 to ships), fire 25% faster and stun ships for 0.25 s.',
           apply(s) {
             const a = main(s);
             a.damage += 18; a.shipDamage = (a.shipDamage || 0) + 72; a.cooldown *= 0.8;
             a.onHit = { ...(a.onHit || {}), stun: { t: 0.5, shipT: 0.25 } };
             a.color = '#fff08a';
           } },
-        { name: 'Zeus Array', cost: 45000, desc: 'Fires 2 bolts per shot, 67% faster, for 80 damage (500 to ships). Unlocks Wrath of Zeus: lightning strikes the 6 strongest enemies for 2500 damage.',
+        { name: 'Zeus Array', cost: 43000, desc: 'Fires 2 bolts per shot, 67% faster, for 80 damage (500 to ships). Unlocks Wrath of Zeus: lightning strikes the 6 strongest enemies for 2500 damage.',
           apply(s) {
             const a = main(s);
             a.damage += 50; a.shipDamage = (a.shipDamage || 0) + 320; a.cooldown *= 0.6; a.count = (a.count || 1) + 1;

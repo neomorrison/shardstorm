@@ -104,110 +104,110 @@ export const AUTHORED_WAVES = [
       g('cobalt', 30, 4, 0.25), g('rose', 10, 9, 0.5),
     ],
   },
-  { // 13 (1.05)
+  { // 13 (0.95)
     name: 'Double Time',
     groups: [
-      g('amber', 25, 0, 0.5, 0), g('jade', 35, 0.5, 0.33, 1),
-      g('rose', 12, 6, 0.4), g('cobalt', 20, 11, 0.15),
+      g('amber', 25, 0, 0.5, 0), g('jade', 26, 0.5, 0.33, 1),
+      g('rose', 12, 6, 0.4), g('cobalt', 19, 11, 0.15),
     ],
   },
-  { // 14 (0.94) phantom
+  { // 14 (0.88) phantom
     name: 'Ghost Signal',
     tip: 'Phantom meteors can only be targeted by towers with detection. Area damage still hits them.',
     groups: [
-      g('jade', 45, 0, 0.28), g('rust', 24, 1, 0.2), g('amber', 20, 3, 0.5),
+      g('jade', 39, 0, 0.28), g('rust', 23, 1, 0.2), g('amber', 20, 3, 0.5),
       g('rose', 10, 8, 0.5), g('cobalt', 8, 10, 0.7, -1, 'phantom'),
     ],
   },
-  { // 15 (1.08)
+  { // 15 (0.95)
     name: 'Needle Storm',
     groups: [
-      g('rose', 20, 0, 0.5), g('amber', 30, 1, 0.35), g('jade', 30, 4, 0.3),
-      g('jade', 6, 9, 0.6, -1, 'phantom'), g('cobalt', 30, 11, 0.15),
+      g('rose', 20, 0, 0.5), g('amber', 19, 1, 0.35), g('jade', 30, 4, 0.3),
+      g('jade', 6, 9, 0.6, -1, 'phantom'), g('cobalt', 29, 11, 0.15),
     ],
   },
-  { // 16 (0.95) iron
+  { // 16 (0.88) iron: a survivable first exposure (two Iron cost 22 Integrity if they leak)
     name: 'Iron Rain',
     tip: 'Iron Meteors shrug off KINETIC damage. Answer them with BLAST, THERMAL, CRYO or ENERGY.',
     groups: [
-      g('rose', 25, 0, 0.45), g('amber', 25, 1, 0.4), g('jade', 30, 3, 0.3),
-      g('iron', 4, 6, 2), g('cobalt', 10, 12, 0.3, -1, 'phantom'),
+      g('rose', 19, 0, 0.45), g('amber', 25, 1, 0.4), g('jade', 38, 3, 0.25),
+      g('iron', 2, 5, 4), g('cobalt', 10, 12, 0.3, -1, 'phantom'),
     ],
   },
-  { // 17 (1.05)
+  { // 17 (0.93)
     name: 'Heavy Metal',
     groups: [
-      g('rose', 30, 0, 0.4), g('iron', 8, 3, 1.2), g('amber', 30, 5, 0.3),
-      g('jade', 12, 9, 0.4, -1, 'phantom'), g('jade', 24, 13, 0.15),
+      g('rose', 30, 0, 0.3), g('iron', 1, 3, 0), g('jade', 7, 3, 0.3), g('amber', 30, 5, 0.3),
+      g('jade', 6, 9, 0.8, -1, 'phantom'), g('jade', 6, 9.4, 0.8, -1), g('jade', 24, 13, 0.15),
     ],
   },
-  { // 18 (0.98) magma, comet
+  { // 18 (0.90) magma, comet
     name: 'Fire and Ice',
     tip: 'Magma ignores BLAST. Comets ignore CRYO and cannot be frozen.',
     groups: [
-      g('rose', 30, 0, 0.35), g('amber', 25, 2, 0.4),
+      g('rose', 22, 0, 0.35), g('amber', 25, 2, 0.4),
       g('magma', 6, 4, 1, 0), g('comet', 6, 8, 1, 1),
-      g('iron', 6, 11, 0.8), g('jade', 10, 14, 0.3, -1, 'phantom'),
+      g('iron', 2, 11, 3.6), g('jade', 7, 11, 0.3), g('rose', 4, 12, 0.4), g('jade', 5, 14, 0.6, -1, 'phantom'), g('jade', 5, 14.3, 0.6, -1),
     ],
   },
-  { // 19 (1.14) spike
+  { // 19 (1.00) spike
     name: 'Avalanche',
     groups: [
-      g('rose', 50, 0, 0.28), g('iron', 10, 5, 0.6),
+      g('rose', 35, 0, 0.28), g('iron', 2, 5, 5), g('jade', 15, 5, 0.3),
       g('magma', 5, 10, 0.5, 0), g('comet', 5, 10, 0.5, 1),
-      g('rose', 8, 13, 0.3, -1, 'phantom'), g('amber', 25, 15, 0.12),
+      g('rose', 4, 13, 0.6, -1, 'phantom'), g('rose', 4, 13.3, 0.6, -1), g('amber', 36, 15, 0.1),
     ],
   },
-  { // 20 (0.96) Storm Titan: Maw
+  { // 20 (0.88) Storm Titan: Maw
     name: 'Maw of the Storm',
     tip: 'A Storm Titan joins this wave. If it reaches the Core, the run ends.',
     titanStart: 5,
     groups: [
-      g('rose', 40, 0, 0.35), g('jade', 35, 2, 0.3), g('iron', 8, 6, 0.8),
+      g('rose', 35, 0, 0.32), g('jade', 34, 2, 0.3), g('iron', 3, 6, 2.5), g('jade', 11, 6, 0.3),
       g('magma', 6, 10, 0.6, 0), g('comet', 6, 10, 0.6, 1),
-      g('amber', 10, 14, 0.35, -1, 'phantom'),
+      g('amber', 5, 14, 0.7, -1, 'phantom'), g('amber', 5, 14.35, 0.7, -1),
     ],
   },
-  { // 21 (0.86) breather
+  { // 21 (0.84) breather
     name: 'Aftermath',
     groups: [
-      g('rose', 60, 0, 0.3), g('iron', 6, 4, 1, 0), g('comet', 6, 8, 1, 1),
-      g('rose', 10, 12, 0.4, -1, 'phantom'), g('amber', 18, 15, 0.2),
+      g('rose', 57, 0, 0.3), g('iron', 3, 4, 2.5, 0), g('jade', 11, 4, 0.3, 0), g('comet', 6, 8, 1, 1),
+      g('rose', 5, 12, 0.8, -1, 'phantom'), g('rose', 5, 12.4, 0.8, -1), g('amber', 18, 15, 0.2),
     ],
   },
-  { // 22 (1.00) prism, nanite
+  { // 22 (0.92) prism, nanite
     name: 'Prism Break',
     tip: 'Prism Meteors ignore THERMAL and ENERGY. Nanite meteors regrow if left alone for 3 seconds.',
     groups: [
-      g('rose', 50, 0, 0.35), g('prism', 6, 3, 0.8),
-      g('iron', 8, 6, 0.8, 0), g('magma', 8, 6, 0.8, 1),
+      g('rose', 39, 0, 0.35), g('prism', 6, 3, 0.8),
+      g('iron', 4, 6, 1.87, 0), g('jade', 15, 6, 0.3, 0), g('magma', 8, 6, 0.8, 1),
       g('comet', 6, 11, 0.6), g('rose', 12, 13, 0.4, -1, 'nanite'),
-      g('amber', 20, 15, 0.2, -1, 'phantom'),
+      g('amber', 10, 15, 0.4, -1, 'phantom'), g('amber', 10, 15.2, 0.4, -1),
     ],
   },
-  { // 23 (1.06)
+  { // 23 (0.95)
     name: 'Regrowth',
     groups: [
-      g('rose', 60, 0, 0.3), g('prism', 10, 3, 0.6), g('amber', 20, 6, 0.3, -1, 'nanite'),
-      g('iron', 10, 9, 0.5), g('magma', 5, 12, 0.4, 0), g('comet', 5, 12, 0.4, 1),
-      g('rose', 20, 15, 0.2, -1, 'phantom'),
+      g('rose', 43, 0, 0.3), g('prism', 10, 3, 0.6), g('amber', 20, 6, 0.3, -1, 'nanite'),
+      g('iron', 4, 9, 1.5), g('jade', 22, 9, 0.3), g('magma', 5, 12, 0.4, 0), g('comet', 5, 12, 0.4, 1),
+      g('rose', 10, 15, 0.4, -1, 'phantom'), g('rose', 10, 15.2, 0.4, -1),
     ],
   },
-  { // 24 (0.98) geode
+  { // 24 (0.90) geode
     name: 'Geode Field',
     tip: 'Geodes ignore BLAST and CRYO, then split into a Magma Meteor and a Comet.',
     groups: [
-      g('rose', 50, 0, 0.35), g('prism', 8, 2, 0.6), g('geode', 6, 5, 1.5),
-      g('rose', 15, 8, 0.4, -1, 'nanite'), g('iron', 8, 10, 0.6, 0), g('comet', 10, 10, 0.5, 1),
-      g('rose', 12, 16, 0.25, -1, 'phantom'),
+      g('rose', 38, 0, 0.35), g('prism', 8, 2, 0.6), g('geode', 6, 5, 1.5),
+      g('rose', 15, 8, 0.4, -1, 'nanite'), g('iron', 4, 10, 1.4, 0), g('jade', 15, 10, 0.3, 0), g('comet', 10, 10, 0.5, 1),
+      g('rose', 6, 16, 0.5, -1, 'phantom'), g('rose', 6, 16.25, 0.5, -1),
     ],
   },
-  { // 25 (1.10)
+  { // 25 (0.98)
     name: 'Crystal Surge',
     groups: [
-      g('rose', 80, 0, 0.22), g('geode', 10, 4, 1),
-      g('magma', 10, 7, 0.4, 0), g('iron', 10, 7, 0.4, 1),
-      g('prism', 8, 12, 0.3), g('rose', 10, 16, 0.3, -1, 'phantom nanite'),
+      g('rose', 59, 0, 0.22), g('geode', 10, 4, 1),
+      g('magma', 10, 7, 0.4, 0), g('iron', 5, 7, 0.9, 1), g('jade', 18, 7, 0.3, 1),
+      g('prism', 8, 12, 0.3), g('rose', 5, 16, 0.6, -1, 'phantom nanite'), g('rose', 5, 16.3, 0.6, -1, 'nanite'),
     ],
   },
   { // 26 (0.89) breather
@@ -215,13 +215,13 @@ export const AUTHORED_WAVES = [
     groups: [
       g('rose', 70, 0, 0.28), g('comet', 8, 3, 0.5, 0), g('prism', 6, 3, 0.6, 1),
       g('geode', 8, 5, 1.2), g('amber', 20, 8, 0.3, -1, 'nanite'),
-      g('rose', 20, 15, 0.25, -1, 'phantom'),
+      g('rose', 10, 15, 0.5, -1, 'phantom'), g('rose', 10, 15.25, 0.5, -1),
     ],
   },
   { // 27 (1.08)
     name: 'Hard Rock',
     groups: [
-      g('rose', 60, 0, 0.32), g('geode', 15, 3, 0.8), g('iron', 15, 6, 0.4),
+      g('rose', 60, 0, 0.32), g('geode', 15, 3, 0.8), g('iron', 8, 6, 0.8), g('jade', 26, 6, 0.3),
       g('magma', 10, 10, 0.4), g('prism', 14, 13, 0.3),
       g('rose', 15, 17, 0.25, -1, 'phantom nanite'),
     ],
@@ -238,7 +238,7 @@ export const AUTHORED_WAVES = [
   { // 29 (1.16) spike
     name: 'Lightshow',
     groups: [
-      g('rose', 70, 0, 0.28), g('iron', 10, 2, 0.5), g('aurora', 10, 4, 1.2),
+      g('rose', 70, 0, 0.28), g('iron', 6, 2, 0.9), g('jade', 15, 2, 0.3), g('aurora', 10, 4, 1.2),
       g('geode', 15, 8, 0.6), g('prism', 8, 12, 0.5, -1, 'nanite'),
       g('rose', 15, 18, 0.2, -1, 'phantom'),
     ],
@@ -247,7 +247,7 @@ export const AUTHORED_WAVES = [
     name: 'Deep Impact',
     groups: [
       g('rose', 60, 0, 0.3), g('aurora', 14, 3, 1.2), g('geode', 12, 6, 0.8),
-      g('iron', 15, 10, 0.4), g('rose', 20, 18, 0.2, -1, 'phantom nanite'),
+      g('iron', 8, 10, 0.8), g('jade', 26, 10, 0.3), g('rose', 20, 18, 0.2, -1, 'phantom nanite'),
     ],
   },
   { // 31 (0.86) breather

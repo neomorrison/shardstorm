@@ -124,8 +124,8 @@ function empAbility(id, name, radius, stunT, shipStun, shipSlow, slowT, cooldown
   return {
     id, name, icon: '\u25ce', cooldown, duration: stunT, // bullseye
     desc: shipStun > 0
-      ? `Stuns meteors within ${radius} units for ${stunT} s, stuns ships for ${shipStun} s and slows them by ${slowPct}% for ${slowT} s.`
-      : `Stuns meteors within ${radius} units for ${stunT} s and slows ships by ${slowPct}% for ${slowT} s.`,
+      ? `Stuns meteors within ${radius} units for ${stunT} s, stuns ships for ${shipStun} s and slows them by ${slowPct}% for ${slowT} s (Storm Titans half as much).`
+      : `Stuns meteors within ${radius} units for ${stunT} s and slows ships by ${slowPct}% for ${slowT} s (Storm Titans half as much).`,
     activate(sim, tower) {
       const fx = { stun: { t: stunT, shipT: shipStun }, slow: { mult: 1, shipMult: shipSlow, t: slowT } };
       const src = { tower, attackKey: id, dtype: 'ENERGY' };

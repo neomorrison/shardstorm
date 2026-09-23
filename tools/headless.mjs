@@ -40,7 +40,7 @@ import { TOWERS, TOWER_LIST } from '../src/data/towers/index.js';
 import { HEROES } from '../src/data/heroes.js';
 import { computeBaseStats, finalizeStats, crosspathReason } from '../src/sim/towers.js';
 import { Rng } from '../src/core/rng.js';
-import { ENEMIES, familyMass } from '../src/data/enemies.js';
+import { ENEMIES, familyMass, SCOUT_HULL } from '../src/data/enemies.js';
 import { titanHp, TITAN_EVERY, incomeFactor, BASE_SPEED, priceFor } from '../src/data/economy.js';
 import { TITAN_ORDER } from '../src/sim/enemies.js';
 import { runAdaptiveMulti, newArenaSim, placeConfigured, towerY, MAIN_TOWER_X } from './bench.mjs';
@@ -216,12 +216,13 @@ function benchCoverage(r, towerRadius) {
 
 // ------------------------------------------------------------------ wave demand
 // Mass of an enemy family split by the category of the gate it sits behind.
-function catMass(type, H, plated, phantom, out, mult) {
+function catMass(type, H, plated, phantom, out, mult, scout = false) {
   const d = ENEMIES[type];
   if (!d) return;
   const ph = phantom || !!d.phantom;
   if (d.kind === 'ship') {
-    out[type === 'specter' ? C_SPECTER : C_SHIP] += d.hp * H * (plated ? 2 : 1) * mult * (type === 'specter' ? SPECTER_WEIGHT : 1);
+    out[type === 'specter' ? C_SPECTER : C_SHIP] += d.hp * H * (plated ? 2 : 1) * (scout ? SCOUT_HULL : 1) * mult * (type === 'specter' ? SPECTER_WEIGHT : 1);
+    if (scout) return; // empty hold
     const cm = d.childMods || null;
     for (const [c, n] of d.children) catMass(c, H, !!(cm && cm.plated), ph || !!(cm && cm.phantom), out, mult * n);
     return;
@@ -255,10 +256,10 @@ export function waveDemand(sim, w) {
   for (const g of spec.groups) {
     if (!ENEMIES[g.type]) continue;
     const mods = g.mods || {};
-    catMass(g.type, spec.hullMult || 1, !!mods.plated, !!mods.phantom, cat, g.count);
-    mass += familyMass(g.type, spec.hullMult || 1, !!mods.plated) * g.count;
+    catMass(g.type, spec.hullMult || 1, !!mods.plated, !!mods.phantom, cat, g.count, !!mods.scout);
+    mass += familyMass(g.type, spec.hullMult || 1, !!mods.plated, !!mods.scout) * g.count;
   }
-  const dur = Math.max(8, spec.duration || 12);
+  const dur = Math.max(8, (spec.duration || 12) * (sim.paceAt ? sim.paceAt(w) : 1));
   for (let c = 0; c < NC; c++) cat[c] /= dur;
   // Ships must also be broken during one pass: sum over towers of (MDS x channel covered) has to
   // reach hull x speed. In bench-tower units (SHIP_REF units of channel each) that is the
@@ -268,7 +269,7 @@ export function waveDemand(sim, w) {
   for (const g of spec.groups) {
     const d = ENEMIES[g.type];
     if (!d || d.kind !== 'ship') continue;
-    const need = d.hp * (spec.hullMult || 1) * (g.mods && g.mods.plated ? 2 : 1) * d.speed * vm / SHIP_REF;
+    const need = d.hp * (spec.hullMult || 1) * (g.mods && g.mods.plated ? 2 : 1) * (g.mods && g.mods.scout ? SCOUT_HULL : 1) * d.speed * vm / SHIP_REF;
     if (g.type === 'specter') specterPass = Math.max(specterPass, need);
     else shipPass = Math.max(shipPass, need);
   }
@@ -307,7 +308,7 @@ function buildSpots(sim, step = 18) {
   for (let y = step; y < 1000; y += step) {
     for (let x = step; x < 1500; x += step) {
       const np = sim.nearestPathPoint(x, y);
-      spots.push({ x, y, dist: np.dist });
+      spots.push({ x, y, dist: np.dist, lane: np.lane || 0 });
     }
   }
   return spots;
@@ -358,6 +359,11 @@ class NoviceBot extends BaseBot {
   act(inWave) {
     if (inWave) return;
     const sim = this.sim;
+    // a novice still builds beside the lanes meteors actually use, in proportion to the
+    // share each lane carries (maps can open their second lane later, map.laneOpen)
+    const share1 = sim.lanes === 2 && sim.laneShare ? sim.laneShare(sim.state.wave + 1) : 0.5;
+    if (!this.nearL) this.nearL = [this.near.filter((s) => s.lane === 0), this.near.filter((s) => s.lane === 1)];
+    const pickNear = () => (sim.lanes === 2 && share1 !== 0.5 && this.nearL[1].length ? (this.rng.next() < share1 ? this.nearL[1] : this.nearL[0]) : this.near);
     for (let guard = 0; guard < 30; guard++) {
       const st = sim.state;
       const wantPlace = this.rng.next() < 0.55 || st.towers.length < 2;
@@ -371,7 +377,8 @@ class NoviceBot extends BaseBot {
         }
         let ok = false;
         for (let k = 0; k < 40 && !ok; k++) {
-          const s = this.near[this.rng.int(this.near.length)];
+          const near = pickNear();
+          const s = near[this.rng.int(near.length)];
           if (sim.canPlace(type, s.x, s.y).ok) ok = sim.placeTower(type, s.x, s.y).ok;
         }
         if (!ok) break;
@@ -424,16 +431,29 @@ class SolidBot extends BaseBot {
       if (k < 5) shipPass = Math.max(shipPass, dm.shipPass * 0.7);
       specterPass = Math.max(specterPass, dm.specterPass * 0.7);
     }
+    // lane weights: maps can open their second lane gradually (map.laneOpen), so the demand
+    // per lane follows the share of spawns each lane will actually carry over the horizon
+    const lw = new Float64Array(lanes).fill(1 / lanes);
+    if (lanes === 2 && sim.laneShare) {
+      let lo = 1, hi = 0;
+      for (let k = 0; k < 3; k++) { const s = sim.laneShare(w + k); lo = Math.min(lo, s); hi = Math.max(hi, s); }
+      lw[0] = 1 - lo; lw[1] = hi;
+    }
     const boost = 1 + 0.45 * Math.min(4, this.leakStreak);
     // early waves arrive sparse and fast relative to the tiny defense: ask for more headroom
-    const K = (this.K + 2 * Math.max(0, (20 - w) / 20)) * boost;
+    // a one-life run (Nightmare) cannot learn from a leak, so it builds with more headroom
+    // from the start, as a careful player would (the leak streak can never kick in there)
+    const risk = sim.state.maxLives <= 20 ? 1.8 : 1;
+    const K = (this.K + 2 * Math.max(0, (20 - w) / 20)) * boost * risk;
     const out = [];
     for (let l = 0; l < lanes; l++) {
       const a = new Float64Array(NC);
-      for (let c = 0; c < NC; c++) a[c] = (D[c] * K) / lanes;
-      // every lane must be able to break its own ships in one pass
-      a[C_SHIP] = Math.max(a[C_SHIP], shipPass * 1.4 * boost);
-      a[C_SPECTER] = Math.max(a[C_SPECTER], specterPass * 1.6 * boost);
+      for (let c = 0; c < NC; c++) a[c] = D[c] * K * lw[l];
+      // every lane that carries spawns must be able to break its own ships in one pass
+      if (lw[l] > 0) {
+        a[C_SHIP] = Math.max(a[C_SHIP], shipPass * 1.4 * boost);
+        a[C_SPECTER] = Math.max(a[C_SPECTER], specterPass * 1.6 * boost);
+      }
       out.push(a);
     }
     return out;
@@ -456,7 +476,9 @@ class SolidBot extends BaseBot {
     const k = rate * (1 + 0.2 * dmgAdd) * (slowF || 1);
     const laneF = new Float64Array(lanes);
     const laneLin = new Float64Array(lanes); // ship categories: time in range grows with coverage
-    if (reach.global) { laneF.fill(1 / lanes); for (let l = 0; l < lanes; l++) laneLin[l] = sim.pathLength(l) / SHIP_REF; }
+    // a global tower covers every lane, but it fires one slug at a time: its ship damage is shared
+    // between the lanes like its meteor damage (counting it in full on each lane double counted it)
+    if (reach.global) { laneF.fill(1 / lanes); for (let l = 0; l < lanes; l++) laneLin[l] = sim.pathLength(l) / SHIP_REF / lanes; }
     else if (reach.aim) {
       const lane = this.aimLane();
       laneF[lane] = 1;
@@ -472,7 +494,9 @@ class SolidBot extends BaseBot {
         laneLin[l] = Math.min(5, cv / SHIP_REF);
       }
     }
-    const shipK = this.aegisSoon && shieldBlocked(type, levels) ? 0 : 1; // KINETIC cannot break the Aegis shield
+    // KINETIC hits deal a fifth of their damage to the Aegis shield (a quarter of its hull), so
+    // a KINETIC-only tower needs 2.25x hull / 1.25x hull = 1.8x as long against it
+    const shipK = this.aegisSoon && shieldBlocked(type, levels) ? 0.55 : 1;
     for (let l = 0; l < lanes; l++) {
       if (!laneF[l] && !laneLin[l]) continue;
       const o = out[l];
@@ -851,7 +875,9 @@ class SolidBot extends BaseBot {
         const affordable = opts.filter((o) => o.cost <= cash);
         const holding = (this.calm || 0) >= 3 && sim.state.wave >= 6 && this.ready >= 0.95;
         const soon = best.cost - cash <= this.lastIncome * 1.1 && (!affordable.length || best.value > affordable[0].value * 1.25);
-        if (holding || soon || !affordable.length) break;
+        // a one-life run does not save up during the opening while the next waves are not covered
+        const exposed = sim.state.maxLives <= 20 && sim.state.wave < 10 && this.ready < 1;
+        if (((holding || soon) && !exposed) || !affordable.length) break;
         best = affordable[0];
       }
       let r;
@@ -935,7 +961,7 @@ function checkFinite(sim) {
   for (const t of st.towers) if (bad(t.damage) || bad(t.x) || bad(t.cashEarned)) throw new Error(`NaN tower ${t.type} ${t.id}`);
 }
 
-export function runGame({ map = 'crater', difficulty = 'pilot', bot = 'solid', waves = 80, seed = 1, quiet = false, log = console.log, maxTicksPerWave = 60 * 600, god = false, cash = null, hero = null, abilities = true } = {}) {
+export function runGame({ map = 'crater', difficulty = 'pilot', bot = 'solid', waves = 80, seed = 1, quiet = false, log = console.log, maxTicksPerWave = 60 * 600, god = false, cash = null, hero = null, abilities = true, onEvent = null } = {}) {
   const sim = new Sim({ mapId: map, difficulty, seed, heroId: hero });
   // test-only overrides (stress the engine at high waves)
   if (god) { sim.state.lives = 1e15; sim.state.maxLives = 1e15; }
@@ -966,6 +992,7 @@ export function runGame({ map = 'crater', difficulty = 'pilot', bot = 'solid', w
     if (ticksThisWave > maxTicksPerWave) throw new Error(`wave ${sim.state.wave} did not finish in ${maxTicksPerWave} ticks`);
     const evs = sim.drainEvents();
     for (const ev of evs) {
+      if (onEvent) onEvent(ev, sim);
       if (ev.t === 'ability') abilityUses[ev.id] = (abilityUses[ev.id] || 0) + 1;
       if (ev.t === 'waveCleared') {
         checkFinite(sim);
