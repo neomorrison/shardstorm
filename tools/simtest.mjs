@@ -692,6 +692,66 @@ section('save/load roundtrip determinism', () => {
   ok(snap && snap.wave === 0, 'mid-wave serialize returns the last build-phase snapshot');
 });
 
+section('save/load with every tower type, a Commander and abilities', () => {
+  // Every tower at a crosspath that turns on its custom behaviours (blades, burn stoker, orbs,
+  // lances, tractors, burning ground, crusher, radar, refinery, vault) plus a levelled Commander.
+  const PLAN = {
+    pulse: [0, 5, 2], scatter: [5, 0, 2], rail: [2, 0, 5], missile: [2, 5, 0], cryo: [5, 0, 2], tesla: [0, 5, 2],
+    laser: [2, 0, 5], drone: [0, 2, 5], mortar: [0, 2, 5], gravity: [5, 0, 2], rig: [0, 5, 2], beacon: [5, 2, 0],
+  };
+  const setup = () => {
+    const sim = new Sim({ mapId: 'frost', seed: 77, heroId: 'nova' });
+    sim.state.lives = 1e12; sim.state.maxLives = 1e12; sim.state.cash = 5e6;
+    const ids = {};
+    const spot = (type, maxd, mind) => {
+      for (let r = 0; r < 8000; r++) {
+        const x = 40 + ((r * 97) % 1420), y = 40 + ((r * 61) % 920);
+        const n = sim.nearestPathPoint(x, y);
+        if (n.dist < maxd && n.dist > mind && sim.canPlace(type, x, y).ok) return [x, y];
+      }
+      return null;
+    };
+    for (const type of Object.keys(PLAN)) {
+      const p = spot(type, type === 'rig' ? 400 : 110, type === 'rig' ? 140 : 0);
+      const r = sim.placeTower(type, p[0], p[1]);
+      ids[type] = r.id;
+      PLAN[type].forEach((n, path) => { for (let k = 0; k < n; k++) sim.upgrade(r.id, path); });
+    }
+    const hp = spot('nova', 110, 0);
+    ids.hero = sim.placeHero(hp[0], hp[1]).id;
+    sim._addHeroXp(sim.getTower(ids.hero), 4000);
+    return { sim, ids };
+  };
+  // Play `n` waves; fire every usable ability at fixed ticks so both runs make the same calls.
+  const play = (sim, n) => {
+    const target = sim.state.cleared + n;
+    let guard = 0;
+    while (sim.state.cleared < target && sim.state.phase !== 'over' && guard++ < 60 * 60 * 40 * n) {
+      if (sim.state.phase === 'build') { sim.startWave(); }
+      sim.step();
+      if (sim.state.tick % 240 === 0) for (const g of sim.abilityBar()) if (g.usable) sim.useAbility(g.id);
+      sim.drainEvents();
+    }
+  };
+  const { sim: A, ids } = setup();
+  eq(Object.keys(ids).length, 13, 'all 12 towers and the Commander placed');
+  const levelsOk = Object.keys(PLAN).every((t) => A.getTower(ids[t]).levels.join('') === PLAN[t].join(''));
+  ok(levelsOk, 'every tower reached its crosspath');
+  A.skipTo(38);
+  play(A, 3); // 38..40 (Aegis Titan) with abilities
+  ok(A.state.phase === 'build', 'in the build phase after wave 40');
+  const save = JSON.parse(JSON.stringify(A.serialize()));
+  const B = Sim.fromSave(save);
+  eq(B.hash(), A.hash(), 'loaded state hash equals the live state');
+  eq(B.state.towers.length, A.state.towers.length, 'tower count survives the save');
+  ok(B.getTower(ids.hero).hero.level === A.getTower(ids.hero).hero.level, 'Commander level survives the save');
+  ok(Math.abs((B.getTower(ids.rig).data.vault || 0) - (A.getTower(ids.rig).data.vault || 0)) < 1e-9, 'vault balance survives the save');
+  play(A, 4);
+  play(B, 4);
+  eq(B.hash(), A.hash(), 'loaded run matches the uninterrupted run 4 waves later (abilities fired in both)');
+  ok(!findNaN(B.state), 'no NaN after load');
+});
+
 section('long run sanity (solid-ish play to wave 60, no NaN)', () => {
   const sim = new Sim({ mapId: 'crater', seed: 4 }); sim.state.lives = 1e12; sim.state.cash = 3e5;
   const orig = sim._gameOver.bind(sim);

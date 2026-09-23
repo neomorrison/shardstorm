@@ -10,6 +10,9 @@
 // Steps file: JSON array of objects, each one of:
 //   {"goto": "/?debug=1"}            navigate (path relative to server root)
 //   {"wait": 1000}                   wait ms
+//   {"waitFor": "js expression"}     poll until the expression is truthy (default 30 s, "timeout": ms);
+//                                    e.g. {"waitFor": "window.__ss && __ss.debug"} before debug calls
+//   evals may use await: they run inside an async function when they contain 'await'
 //   {"eval": "js expression"}        evaluate in page (awaited); result is printed
 //   {"click": [x, y]}                mouse click at CSS pixel coords
 //   {"move": [x, y]}                 mouse move
@@ -79,8 +82,14 @@ for (const s of steps) {
     if (s.goto !== undefined) s.goto = s.goto.replace(/^[A-Za-z]:\/Program Files\/Git/, '');
     if (s.goto !== undefined) { await page.goto(base + s.goto, { waitUntil: 'load', timeout: 30000 }); console.log(`goto ${s.goto}`); }
     else if (s.wait !== undefined) await new Promise((r) => setTimeout(r, s.wait));
+    else if (s.waitFor !== undefined) {
+      await page.waitForFunction((code) => { try { return !!(0, eval)(code); } catch { return false; } }, { timeout: s.timeout || 30000, polling: 100 }, s.waitFor);
+      console.log(`ready: ${s.waitFor.slice(0, 80)}`);
+    }
     else if (s.eval !== undefined) {
-      const res = await page.evaluate(async (code) => { const v = await (0, eval)(code); try { return JSON.stringify(v, null, 0)?.slice(0, 4000); } catch { return String(v); } }, s.eval);
+      // code containing `await` runs inside an async function (return the result explicitly)
+      const code = /\bawait\b/.test(s.eval) && !/^\s*\(async/.test(s.eval) ? `(async()=>{${s.eval}})()` : s.eval;
+      const res = await page.evaluate(async (c) => { const v = await (0, eval)(c); try { return JSON.stringify(v, null, 0)?.slice(0, 4000); } catch { return String(v); } }, code);
       console.log(`eval> ${s.eval.slice(0, 120)}\n  = ${res}`);
     }
     else if (s.click) { await page.mouse.click(s.click[0], s.click[1]); }

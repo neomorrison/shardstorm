@@ -67,6 +67,14 @@ function seeded(seed) {
 
 // =========================================================================== map preview
 
+/** Map card art: the renderer's real map render when available, else the vector sketch. */
+function paintMapPreview(g, canvas, map, cssW, cssH) {
+  if (g.renderMapPreview) {
+    try { if (g.renderMapPreview(canvas, map, cssW, cssH, g.assets)) return; } catch (err) { console.warn('[shardstorm] map preview failed', err); }
+  }
+  drawMapPreview(canvas, map, cssW, cssH, g.images['map_' + map.id] || null);
+}
+
 export function drawMapPreview(canvas, map, cssW, cssH, image = null) {
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   canvas.width = Math.round(cssW * dpr);
@@ -666,7 +674,7 @@ export class Screens {
         const m = MAPS[b.dataset.map];
         const art = b.querySelector('.map-card__art');
         const w = Math.max(200, Math.round(art.clientWidth || 300));
-        drawMapPreview(b.querySelector('canvas'), m, w, Math.round(w / 1.5), g.images['map_' + m.id] || null);
+        paintMapPreview(g, b.querySelector('canvas'), m, w, Math.round(w / 1.5));
       }
     });
     grid.addEventListener('click', (e) => {
@@ -689,6 +697,9 @@ export class Screens {
     let hero = heroIds.includes(g.settings.lastHero) ? g.settings.lastHero : null;
 
     this._header(node, 'New run', 'Choose a difficulty' + (heroIds.length ? ' and a commander' : ''));
+    let coreSrc = null;
+    try { coreSrc = g.assets?.image?.('ui_integrity')?.src || null; } catch { coreSrc = null; }
+    const coreArt = coreSrc ? `<img class="dstat__art" src="${esc(coreSrc)}" width="22" height="22" alt="" draggable="false">` : icon('core');
     const body = el('div', 'setup');
     const bestChips = DIFF_ORDER.filter((d) => DIFFICULTIES[d]).map((d) => {
       const v = rec.best?.[map.id]?.[d] || 0;
@@ -715,7 +726,7 @@ export class Screens {
             <span class="diff-card__name">${esc(D.name)}</span>
             <span class="diff-card__blurb">${esc(DIFF_BLURB[d] || '')}</span>
             <span class="diff-card__stats">
-              <span class="dstat"><span class="dstat__top"><span class="dstat__i">${icon('core')}</span><span class="dstat__v">${int(D.lives)}</span></span><span class="dstat__k">Core</span></span>
+              <span class="dstat"><span class="dstat__top"><span class="dstat__i">${coreArt}</span><span class="dstat__v">${int(D.lives)}</span></span><span class="dstat__k">Core</span></span>
               <span class="dstat"><span class="dstat__top"><span class="dstat__i">${glyph()}</span><span class="dstat__v">${pctv === 0 ? 'x1.00' : 'x' + D.costMult.toFixed(2)}</span></span><span class="dstat__k">${pctv === 0 ? 'Standard costs' : pctv < 0 ? `${-pctv}% cheaper` : `${pctv}% pricier`}</span></span>
             </span>
             <span class="diff-card__best">${best ? `${icon('star')} Best wave ${best}` : 'No record yet'}</span>
@@ -753,7 +764,7 @@ export class Screens {
     requestAnimationFrame(() => {
       const art = body.querySelector('.map-strip__art');
       const w = Math.max(200, Math.round(art.clientWidth || 360));
-      drawMapPreview(art.querySelector('canvas'), map, w, Math.round(w / 1.5), g.images['map_' + map.id] || null);
+      paintMapPreview(g, art.querySelector('canvas'), map, w, Math.round(w / 1.5));
     });
     for (const c of body.querySelectorAll('.hero-card canvas')) {
       const id = c.closest('.hero-card').dataset.hero;
@@ -852,7 +863,7 @@ export class Screens {
         <div class="set-row">
           <div class="set-row__text"><span class="set-row__label" id="lbl-particles">Particle quality</span><span class="set-row__sub">Lower it if late waves stutter.</span></div>
           <div class="seg seg--set" role="radiogroup" aria-labelledby="lbl-particles">
-            ${['low', 'high'].map((q) => `<button type="button" class="seg__btn ${s.particles === q ? 'is-on' : ''}" role="radio" aria-checked="${s.particles === q}" data-particles="${q}">${q.charAt(0).toUpperCase() + q.slice(1)}</button>`).join('')}
+            ${['low', 'medium', 'high'].map((q) => `<button type="button" class="seg__btn ${s.particles === q ? 'is-on' : ''}" role="radio" aria-checked="${s.particles === q}" data-particles="${q}">${q.charAt(0).toUpperCase() + q.slice(1)}</button>`).join('')}
           </div>
         </div>
         ${toggle('shake', 'Screen shake', 'Explosions and Titans rattle the camera.')}
@@ -1097,14 +1108,16 @@ export class Screens {
     const draw = () => {
       for (const b of list.querySelectorAll('.ctow__item')) b.setAttribute('aria-selected', String(b.dataset.tower === this.codexTower));
       const def = TOWERS[this.codexTower];
-      const atks = Object.values(def.base?.attacks || {});
+      const atks = Object.values(def.base?.attacks || {}).filter((a) => a && a.needsTarget !== false && !(a.kind === 'field' && !(a.dps > 0)));
       const dts = [...new Set(atks.map((a) => a.dtype).filter(Boolean))];
       const range = def.base?.range;
+      const aura = def.base?.aura?.radius;
       const isRig = /rig/i.test(def.id || this.codexTower);
       const facts = [
         `<span class="fact"><span class="fact__k">Cost</span><span class="fact__v">${credits(priceFor(def.cost || 0, diff))}</span></span>`,
         def.hotkey ? `<span class="fact"><span class="fact__k">Hotkey</span><span class="fact__v"><kbd>${esc(def.hotkey.toUpperCase())}</kbd></span></span>` : '',
-        Number.isFinite(range) ? `<span class="fact"><span class="fact__k">Range</span><span class="fact__v">${range >= 5000 ? 'Global' : int(range)}</span></span>` : '',
+        range === Infinity || Number.isFinite(range) ? `<span class="fact"><span class="fact__k">Range</span><span class="fact__v">${range >= 5000 ? 'Global' : int(range)}</span></span>` : '',
+        Number.isFinite(aura) && aura > 0 ? `<span class="fact"><span class="fact__k">Aura</span><span class="fact__v">${int(aura)}</span></span>` : '',
         `<span class="fact"><span class="fact__k">Damage</span><span class="fact__v">${dts.length ? dts.map((t) => dtypeChip(t)).join('') : '<span class="muted">None</span>'}</span></span>`,
         `<span class="fact"><span class="fact__k">Detection</span><span class="fact__v">${def.base?.detection ? 'Yes' : 'No'}</span></span>`,
         isRig ? `<span class="fact"><span class="fact__k">Limit</span><span class="fact__v">${RIG_CAP} per run</span></span>` : '',

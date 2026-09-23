@@ -1,5 +1,6 @@
-// Camera: fits the 1500 x 1000 world into the canvas with `contain` scaling, centered.
-// Handles devicePixelRatio (capped at 2), canvas backing-store sizing and screen shake.
+// Camera: fits the 1500 x 1000 world into the canvas with `contain` scaling, centered, then
+// applies an optional zoom and pan on top (pinch and wheel zoom). Handles devicePixelRatio
+// (capped at 2), canvas backing-store sizing and screen shake.
 //
 // Coordinate spaces:
 //   world   : 0..1500 x 0..1000 world units (the sim)
@@ -8,10 +9,19 @@
 //
 // The renderer draws in world space by calling camera.apply(ctx), which sets
 // ctx.setTransform(k, 0, 0, k, ox, oy) with k = device pixels per world unit.
+//
+// Zoom 1 is the `contain` fit. Zooming in scales about a screen point; panning is clamped so
+// the world always covers the area left after insets (or stays centered on an axis where it
+// is smaller than that area). `fitView` is the visible world rect at zoom 1, which stays put
+// while zooming (the renderer places portals with it).
 
 export const WORLD_W = 1500;
 export const WORLD_H = 1000;
 const MAX_DPR = 2;
+// Zoom limits: never past MAX_ZOOM, and never so close that one world unit exceeds
+// MAX_CSS_SCALE CSS px (a desktop monitor needs far less zoom than a phone).
+const MAX_ZOOM = 4;
+const MAX_CSS_SCALE = 1.8;
 
 export class Camera {
   constructor(canvas) {
@@ -19,6 +29,7 @@ export class Camera {
     this.cssW = 0; this.cssH = 0;       // canvas size in CSS px
     this.dpr = 1;
     this.w = 0; this.h = 0;             // backing store size (device px)
+    this.fitScale = 1;                  // CSS px per world unit at zoom 1
     this.scale = 1;                     // CSS px per world unit
     this.k = 1;                         // device px per world unit (scale * dpr)
     this.offX = 0; this.offY = 0;       // CSS px offset of world origin
@@ -26,13 +37,19 @@ export class Camera {
     this.shakeX = 0; this.shakeY = 0;   // device px
     this.trauma = 0;
     this.version = 0;                   // bumps whenever the transform changes (cache key)
+    this.zoom = 1;
+    this.cx = WORLD_W / 2;              // world point at the center of the fit area
+    this.cy = WORLD_H / 2;
+    this.zoomedAt = -1e9;               // performance.now() of the last zoom change
     // CSS px kept clear of world content (HUD bars, drawers); terrain still fills them.
     this.insets = { top: 0, right: 0, bottom: 0, left: 0 };
     this._insetsDirty = false;
     this._rectCache = null;
     this._rectT = 0;
+    this._avail = { x: 0, y: 0, w: 1, h: 1 };
     // Visible world rectangle (may extend beyond the world on non 3:2 screens).
     this.view = { x0: 0, y0: 0, x1: WORLD_W, y1: WORLD_H };
+    this.fitView = { x0: 0, y0: 0, x1: WORLD_W, y1: WORLD_H };
   }
 
   // Measure the canvas and resize the backing store if needed. Returns true if changed.
@@ -57,20 +74,81 @@ export class Camera {
     const availW = Math.max(cssW * 0.5, cssW - I.left - I.right);
     const availH = Math.max(cssH * 0.5, cssH - I.top - I.bottom);
     const padL = Math.min(I.left, cssW - availW), padT = Math.min(I.top, cssH - availH);
-    this.scale = Math.min(availW / WORLD_W, availH / WORLD_H);
-    this.k = this.scale * dpr;
-    this.offX = padL + (availW - WORLD_W * this.scale) / 2;
-    this.offY = padT + (availH - WORLD_H * this.scale) / 2;
-    this.ox = this.offX * dpr;
-    this.oy = this.offY * dpr;
+    this._avail = { x: padL, y: padT, w: availW, h: availH };
+    this.fitScale = Math.min(availW / WORLD_W, availH / WORLD_H);
+    const fx = padL + (availW - WORLD_W * this.fitScale) / 2;
+    const fy = padT + (availH - WORLD_H * this.fitScale) / 2;
+    this.fitView = {
+      x0: -fx / this.fitScale, y0: -fy / this.fitScale,
+      x1: (cssW - fx) / this.fitScale, y1: (cssH - fy) / this.fitScale,
+    };
+    this.zoom = Math.min(this.zoom, this.maxZoom);
+    this._apply();
+    this._rectCache = null;
+    return true;
+  }
+
+  get maxZoom() { return Math.max(1, Math.min(MAX_ZOOM, MAX_CSS_SCALE / Math.max(1e-6, this.fitScale))); }
+  get zoomed() { return this.zoom > 1.001; }
+
+  // Recompute scale and offsets from zoom and the (clamped) view center.
+  _apply() {
+    const A = this._avail;
+    const s = this.fitScale * this.zoom;
+    const ww = WORLD_W * s, wh = WORLD_H * s;
+    let offX, offY;
+    if (ww <= A.w + 0.5) offX = A.x + (A.w - ww) / 2;
+    else offX = Math.min(A.x, Math.max(A.x + A.w - ww, A.x + A.w / 2 - this.cx * s));
+    if (wh <= A.h + 0.5) offY = A.y + (A.h - wh) / 2;
+    else offY = Math.min(A.y, Math.max(A.y + A.h - wh, A.y + A.h / 2 - this.cy * s));
+    this.cx = (A.x + A.w / 2 - offX) / s;
+    this.cy = (A.y + A.h / 2 - offY) / s;
+    this.scale = s;
+    this.k = s * this.dpr;
+    this.offX = offX; this.offY = offY;
+    this.ox = offX * this.dpr;
+    this.oy = offY * this.dpr;
     this.view = {
-      x0: -this.offX / this.scale,
-      y0: -this.offY / this.scale,
-      x1: (cssW - this.offX) / this.scale,
-      y1: (cssH - this.offY) / this.scale,
+      x0: -offX / s, y0: -offY / s,
+      x1: (this.cssW - offX) / s, y1: (this.cssH - offY) / s,
     };
     this.version++;
-    this._rectCache = null;
+  }
+
+  // Zoom to z (clamped) keeping the world point under CSS point (px, py) fixed.
+  // Returns true if the transform changed.
+  setZoom(z, px = this.cssW / 2, py = this.cssH / 2) {
+    z = Math.max(1, Math.min(this.maxZoom, z));
+    if (Math.abs(z - this.zoom) < 1e-4) return false;
+    const w = this.screenToWorld(px, py);
+    const A = this._avail;
+    const s = this.fitScale * z;
+    this.zoom = z;
+    this.cx = w.x + (A.x + A.w / 2 - px) / s;
+    this.cy = w.y + (A.y + A.h / 2 - py) / s;
+    this.zoomedAt = now();
+    this._apply();
+    return true;
+  }
+
+  zoomBy(f, px, py) { return this.setZoom(this.zoom * f, px, py); }
+
+  // Pan by a CSS px delta (content follows the finger). Returns true if anything moved.
+  panBy(dx, dy) {
+    if (!dx && !dy) return false;
+    const ox = this.offX, oy = this.offY;
+    this.cx -= dx / this.scale;
+    this.cy -= dy / this.scale;
+    this._apply();
+    return Math.abs(this.offX - ox) > 0.01 || Math.abs(this.offY - oy) > 0.01;
+  }
+
+  // Back to the plain `contain` fit.
+  resetView() {
+    if (!this.zoomed && Math.abs(this.cx - WORLD_W / 2) < 0.5 && Math.abs(this.cy - WORLD_H / 2) < 0.5) return false;
+    this.zoom = 1; this.cx = WORLD_W / 2; this.cy = WORLD_H / 2;
+    this.zoomedAt = now();
+    this._apply();
     return true;
   }
 
@@ -118,10 +196,10 @@ export class Camera {
 
   // Client (viewport) coordinates, e.g. MouseEvent.clientX/Y -> world.
   clientToWorld(cx, cy) {
-    const now = (typeof performance !== 'undefined') ? performance.now() : 0;
-    if (!this._rectCache || now - this._rectT > 250) {
+    const t = now();
+    if (!this._rectCache || t - this._rectT > 250) {
       this._rectCache = this.canvas.getBoundingClientRect();
-      this._rectT = now;
+      this._rectT = t;
     }
     const r = this._rectCache;
     // Account for CSS scaling of the canvas element itself (rect vs client size).
@@ -136,3 +214,5 @@ export class Camera {
     return x + r >= v.x0 && x - r <= v.x1 && y + r >= v.y0 && y - r <= v.y1;
   }
 }
+
+function now() { return (typeof performance !== 'undefined') ? performance.now() : Date.now(); }

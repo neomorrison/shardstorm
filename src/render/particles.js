@@ -7,6 +7,12 @@ import {
   glowColor, mix, shade, hsl,
 } from './procedural.js';
 
+// Particle quality tiers: pool cap, emission multiplier and ring cap.
+const QUALITY = {
+  low: { cap: 700, emit: 0.45, rings: 30 },
+  medium: { cap: 1300, emit: 0.7, rings: 55 },
+  high: { cap: 2200, emit: 1, rings: 90 },
+};
 const F_ALIGN = 1;    // rotation follows velocity
 const F_LINEAR = 2;   // linear fade (else hold then fade over the last 35%)
 const F_FADEIN = 4;   // quick fade in
@@ -31,16 +37,16 @@ export class Particles {
     this.quality = 'high';
   }
 
-  // q: 'low' | 'high'; scale (0..1) lets the renderer's load governor shrink the pool.
+  // q: 'low' | 'medium' | 'high'; scale (0..1) lets the renderer's load governor shrink the pool.
   setQuality(q, scale = 1) {
-    this.quality = q === 'low' ? 'low' : 'high';
-    this.cap = Math.max(150, Math.round((this.quality === 'low' ? 700 : 2200) * scale));
+    this.quality = QUALITY[q] ? q : 'high';
+    this.cap = Math.max(150, Math.round(QUALITY[this.quality].cap * scale));
   }
 
   // Emission budget multiplier: lower quality and a full pool both thin the effects.
   get budget() {
     const fill = this.n / this.cap;
-    let b = this.quality === 'low' ? 0.45 : 1;
+    let b = QUALITY[this.quality].emit;
     if (fill > 0.55) b *= Math.max(0.1, (1 - fill) / 0.45);
     return b;
   }
@@ -213,7 +219,7 @@ export class Particles {
   // ------------------------------------------------------------------------
 
   ring(x, y, r0, r1, life, color, w = 3, a = 1, add = false) {
-    if (this.rings.length > (this.quality === 'low' ? 30 : 90)) return;
+    if (this.rings.length > QUALITY[this.quality].rings) return;
     this.rings.push({ x, y, r0, r1, life, max: life, color, w, a, add });
   }
 

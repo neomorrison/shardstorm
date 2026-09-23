@@ -69,9 +69,12 @@ export function payWaveIncome(sim, w) {
       let v = t.data.vault || 0;
       const interest = Math.min(v, cap) * rate;
       v += amt + interest;
-      if (v > cap) { payout(sim, t, v - cap, 'rig'); v = cap; }
+      let over = 0;
+      if (v > cap) { over = v - cap; payout(sim, t, over, 'rig'); v = cap; }
       t.data.vault = v;
-      if (amt + interest > 0) sim.emit({ t: 'vault', tower: t.id, amount: amt + interest, balance: v, x: t.x, y: t.y });
+      // `amount` is what stayed in the vault (0 once it is full); any overflow was paid out
+      // as a 'cash' event
+      if (amt + interest > 0) sim.emit({ t: 'vault', tower: t.id, amount: amt + interest - over, balance: v, x: t.x, y: t.y });
     } else payout(sim, t, amt, 'rig');
     if (inc.supply && inc.supply.drops > 0) {
       const each = (inc.supply.value || 0) * f;

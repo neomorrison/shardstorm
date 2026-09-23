@@ -321,6 +321,12 @@ function clampOff(sim, off) {
   return off < -lim ? -lim : off > lim ? lim : off;
 }
 
+// Storm Titans resist slows: a slow is half as strong on a Titan (a 0.4 slow becomes 0.7),
+// like stuns, which last half as long. An effect can set slow.titanMult / freeze.titanMult to
+// give Titans an exact value instead.
+export const TITAN_SLOW_RESIST = 0.5;
+function titanSlow(m) { return 1 - (1 - m) * (1 - TITAN_SLOW_RESIST); }
+
 function setSlow(e, mult, t) {
   if (e.slowT <= 0 || mult < e.slowMult) { e.slowMult = mult; e.slowT = t; }
   else if (mult === e.slowMult && t > e.slowT) e.slowT = t;
@@ -331,16 +337,23 @@ export function applyEffects(sim, e, fx, src) {
   if (e.dead) return;
   const ship = e.ship;
   const dtype = src.dtype;
+  // CRYO-immune meteors (Comet, Geode) are never slowed or frozen by CRYO, including when a
+  // CRYO hit on their parent passes its on-hit effects down to them.
+  const cryoImmune = dtype === 'CRYO' && e.def.immune.indexOf('CRYO') >= 0;
   const slow = fx.slow;
   if (slow) {
-    if (!(dtype === 'CRYO' && e.type === 'comet')) {
-      const m = ship ? slow.shipMult : slow.mult;
+    if (!(dtype === 'CRYO' && e.type === 'comet') && !cryoImmune) {
+      let m = ship ? slow.shipMult : slow.mult;
+      if (e.titan !== null && m !== undefined) m = slow.titanMult ?? titanSlow(m);
       if (m !== undefined && m < 1) setSlow(e, m, slow.t ?? 1);
     }
   }
   const fr = fx.freeze;
-  if (fr && e.type !== 'comet') {
-    if (ship) setSlow(e, fr.shipMult ?? SHIP_FREEZE_SLOW, fr.t);
+  if (fr && e.type !== 'comet' && !cryoImmune) {
+    if (ship) {
+      const m = fr.shipMult ?? SHIP_FREEZE_SLOW;
+      setSlow(e, e.titan !== null ? (fr.titanMult ?? titanSlow(m)) : m, fr.t);
+    }
     else if (fr.t > e.frozenT) { e.frozenT = fr.t; if (!e._frozeEmit) { e._frozeEmit = true; } }
   }
   const burn = fx.burn;

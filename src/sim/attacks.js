@@ -147,8 +147,10 @@ export function fireHitscan(sim, t, a, target, ox, oy) {
   }
 }
 
+let chainSeq = 0;
 export function fireChain(sim, t, a, target, ox, oy) {
-  const hitIds = sim._chainHit; hitIds.length = 0;
+  // Enemies already hit by this shot carry the shot's stamp (O(1) exclusion in findTarget).
+  const stamp = ++chainSeq;
   const fromTower = ox === t.x && oy === t.y;
   if (fromTower) t.angle = Math.atan2(target.y - oy, target.x - ox);
   let start = target;
@@ -157,16 +159,16 @@ export function fireChain(sim, t, a, target, ox, oy) {
     let cur = start;
     let dmg = a.damage;
     for (let j = 0; j <= a.jumps && cur; j++) {
-      hitIds.push(cur.id);
+      cur._xs = stamp;
       const cx = cur.x, cy = cur.y;
       pts.push([cx, cy]);
       damageEnemy(sim, cur, dmg, a.dtype, a._src, -1, a.onHit);
       if (j === a.jumps) break;
       dmg *= a.falloff;
-      cur = findTarget(sim, t, a.jumpRange, 'close', a, cx, cy, hitIds);
+      cur = findTarget(sim, t, a.jumpRange, 'close', a, cx, cy, stamp);
     }
-    sim.emit({ t: 'zap', points: pts, tower: t.id, type: t.type, dtype: a.dtype, color: a.color || null, visual: a.visual || 'arc' });
-    if (c + 1 < a.count) start = findTarget(sim, t, a.range, t.targeting, a, ox, oy, hitIds);
+    sim.emit({ t: 'zap', points: pts, tower: t.id, type: t.type, dtype: a.dtype, color: a.color || null, visual: a.visual || 'arc', width: a.zapWidth || 0 });
+    if (c + 1 < a.count) start = findTarget(sim, t, a.range, t.targeting, a, ox, oy, stamp);
   }
 }
 
@@ -338,6 +340,14 @@ function droneList(sim, t, a) {
     const d = dl.pop();
     const i = sim.state.drones.indexOf(d);
     if (i >= 0) sim.state.drones.splice(i, 1);
+  }
+  // When an upgrade changes the attack's look, restyle the drones created before it (a tower's
+  // own custom attack may still restyle them afterwards; this only fires on a change).
+  const vis = a.visual || 'drone', kind = a.droneKind || a.key, col = a.color || null;
+  const sig = vis + '|' + kind + '|' + col;
+  if (dl._look !== sig) {
+    dl._look = sig;
+    for (let i = 0; i < dl.length; i++) { const d = dl[i]; d.visual = vis; d.kind = kind; d.color = col; }
   }
   return dl;
 }

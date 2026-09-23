@@ -3,7 +3,7 @@
 // The UI never mutates sim.state directly; it only calls Sim commands (docs/ARCHITECTURE.md section 6).
 
 import {
-  esc, int, short, money, dec, credits, glyph, icon, dtypeLabel, targetLabel, friendlyReason, clean,
+  esc, int, short, money, dec, credits, glyph, icon, hasIcon, dtypeLabel, targetLabel, friendlyReason, clean,
 } from './format.js';
 import { RIG_CAP, SELL_RATE, priceFor, TITAN_EVERY, heroXpNeed, HERO_MAX_LEVEL } from '../data/economy.js';
 
@@ -74,10 +74,23 @@ function lockReason(reason, level) {
 }
 
 /** Primary damage type of a tower def or stats block. */
+// Damage type of the first attack that actually shoots at things. Passive helper attacks
+// (needsTarget: false, such as a Rig's payout tracker or a Beacon's radar) do not count.
 export function primaryDtype(stats) {
   const atks = stats?.attacks ? Object.values(stats.attacks) : [];
-  for (const a of atks) if (a && a.dtype) return a.dtype;
+  for (const a of atks) if (a && a.dtype && a.needsTarget !== false && dealsDamage(a)) return a.dtype;
   return null;
+}
+
+// A slowing field with no damage per second deals no damage (the base Gravity Well).
+export function dealsDamage(a) {
+  return !(a.kind === 'field' && !(a.dps > 0));
+}
+
+// Does any attack of these stats pick targets? (Rigs and Beacons only have passive helpers.)
+export function hasTargetingAttack(stats) {
+  const atks = stats?.attacks ? Object.values(stats.attacks) : [];
+  return atks.some((a) => a && a.needsTarget !== false);
 }
 
 // ---- UI ---------------------------------------------------------------------------------
@@ -133,7 +146,7 @@ export class UI {
     h.innerHTML = `
       <div class="hud__stats">
         <div class="stat stat--lives" title="Core Integrity">
-          <span class="stat__icon">${icon('core')}</span>
+          <span class="stat__icon">${this._artIcon('ui_integrity', 'stat__art', icon('core'))}</span>
           <span class="stat__body"><span class="stat__v" data-k="lives">0</span><span class="stat__l">Core</span></span>
         </div>
         <div class="stat stat--cash" title="Credits">
@@ -186,12 +199,24 @@ export class UI {
     });
   }
 
+  /** An <img> for a UI sprite from the manifest, or the fallback markup when it is missing. */
+  _artIcon(key, cls, fallback) {
+    let src = null;
+    try { src = this.game.assets?.image?.(key)?.src || null; } catch { src = null; }
+    // width/height attributes keep the art icon-sized even before the stylesheet applies
+    return src ? `<img class="${cls}" src="${esc(src)}" width="30" height="30" alt="" draggable="false" decoding="async">` : fallback;
+  }
+
   _buildOverlay() {
     const o = this.overlay;
     o.innerHTML = `
+      <div class="view-ctl" hidden>
+        <button type="button" class="view-ctl__fit" aria-label="Fit the whole map (0)" title="Fit the whole map (0)">${icon('fit')}<span>Fit map</span></button>
+      </div>
       <div class="titan" hidden aria-live="polite">
         <div class="titan__label"><span class="titan__tag">Storm Titan</span><span class="titan__name"></span></div>
         <div class="titan__bar"><div class="titan__hp"></div><div class="titan__shield"></div><span class="titan__num"></span></div>
+        <span class="titan__shield-ico" hidden>${this._artIcon('ui_shield', 'titan__shield-art', '')}</span>
       </div>
       <div class="banners" aria-live="polite"></div>
       <div class="coach" hidden><span class="coach__step"></span><span class="coach__text"></span></div>
@@ -209,6 +234,7 @@ export class UI {
     this.$titanHp = o.querySelector('.titan__hp');
     this.$titanShield = o.querySelector('.titan__shield');
     this.$titanNum = o.querySelector('.titan__num');
+    this.$titanShieldIco = o.querySelector('.titan__shield-ico');
     this.$banners = o.querySelector('.banners');
     this.$aimHint = o.querySelector('.aim-hint');
     this.$coach = o.querySelector('.coach');
@@ -223,6 +249,11 @@ export class UI {
     this.$abilities = o.querySelector('.abilities');
     this.$toasts = o.querySelector('.toasts');
     this.$fps = o.querySelector('.fps');
+    this.$viewCtl = o.querySelector('.view-ctl');
+    o.querySelector('.view-ctl__fit').addEventListener('click', (e) => {
+      this.game.resetView();
+      this._blurAfterPointer(e.currentTarget, e);
+    });
 
     o.querySelector('.touch-place__cancel').addEventListener('click', () => this.cancelPlacing());
     this.$touchOk.addEventListener('click', () => this.confirmPlace());
@@ -356,6 +387,11 @@ export class UI {
     for (let w = 1; w <= Math.min(sim.state.wave, 240); w++) this._markSeen(sim, w);
     this._renderCoach();
     this.update(sim, 0);
+    // Phones show the whole map small; say once per session that it zooms.
+    if (this.game.isTouch && this.game.layout === 'compact' && !UI._zoomHinted) {
+      UI._zoomHinted = true;
+      setTimeout(() => { if (this.sim === sim) this.toast('Pinch to zoom the map, drag to pan', 'tip', 3600); }, 900);
+    }
   }
 
   /** Remembers which enemy types (and modifiers) the player has already faced this run. */
@@ -796,10 +832,12 @@ export class UI {
 
     // targeting
     const modes = info.modes || t.stats?.targetModes || def.base?.targetModes || ['first', 'last', 'strong', 'close'];
-    const atkCount = t.stats?._attackList ? t.stats._attackList.length : Object.keys(t.stats?.attacks || {}).length;
-    const noTarget = !modes || modes.length === 0 || (atkCount === 0 && !tp.hero);
+    const noTarget = !modes || modes.length === 0 || (!hasTargetingAttack(t.stats) && !tp.hero);
     setHidden(tp.target, noTarget);
     setText(tp.mode, targetLabel(info.targeting || t.targeting));
+    // a single mode (the mortar's Manual) has nothing to cycle through
+    const oneMode = modes.length <= 1;
+    for (const b of tp.target.querySelectorAll('[data-act="tprev"], [data-act="tnext"], .tp__kbd')) setHidden(b, oneMode);
 
     // mortar aim, vault withdraw
     const mortar = typeof info.aimable === 'boolean' ? info.aimable : this._hasMortar(t);
@@ -880,12 +918,15 @@ export class UI {
 
   _heroNotes(def, level, info) {
     const list = def.abilities || def.skills || null;
+    const maxL = def.hero?.maxLevel || 20;
+    const nextNote = level < maxL ? def.hero?.levelNotes?.[level - 1] : null;
+    const nextLine = nextNote ? `<p class="hero-next"><b>Level ${level + 1}:</b> ${esc(clean(nextNote))}</p>` : '';
     if (Array.isArray(list) && list.length) {
       return `<ul class="hero-abil">${list.map((a) => {
         const lvl = a.level ?? a.unlock ?? 0;
         const on = level >= lvl;
-        return `<li class="${on ? 'on' : ''}"><span class="hero-abil__lvl">L${lvl}</span><span class="hero-abil__name">${esc(clean(a.name || ''))}</span></li>`;
-      }).join('')}</ul>`;
+        return `<li class="${on ? 'on' : ''}" title="${esc(clean(a.desc || ''))}"><span class="hero-abil__lvl">L${lvl}</span><span class="hero-abil__name">${esc(clean(a.name || ''))}</span></li>`;
+      }).join('')}</ul>${nextLine}`;
     }
     const have = (info?.abilities || []).map((a) => `<li class="on"><span class="hero-abil__lvl">${icon('bolt')}</span><span class="hero-abil__name">${esc(clean(a.name || a.id))}</span></li>`).join('');
     const next = level < 3 ? 'First ability at level 3'
@@ -1019,7 +1060,14 @@ export class UI {
           break;
         case 'heroLevel': {
           const def = this.data.HEROES[e.type];
-          this.toast(`${def?.name || 'Commander'} reached level ${e.level}`, 'good');
+          // the level's note, shortened to its headline ("Orbital Salvo II", "Twin Rifle") when long
+          let note = clean(def?.hero?.levelNotes?.[e.level - 2] || '');
+          if (note.length > 70) {
+            const head = note.split(':')[0];
+            const first = note.split('. ')[0];
+            note = head.length < note.length && head.length <= 32 ? head : first.length <= 70 ? first.replace(/\.$/, '') : '';
+          }
+          this.toast(`${def?.name || 'Commander'} reached level ${e.level}${note ? `: ${note}` : ''}`, 'good', note ? 4200 : undefined);
           this._panelDirty = true;
           break;
         }
@@ -1121,6 +1169,7 @@ export class UI {
     if (this._coach) setHidden(this.$coach, this.state.aimingTowerId != null || !!s.titan);
     this._updateGhostTag();
     if (this.game.isTouch) this._updateTouchControls();
+    setHidden(this.$viewCtl, !((this.game.renderer?.zoom || 1) > 1.01));
   }
 
   _updateWaveButtons(sim) {
@@ -1286,8 +1335,11 @@ export class UI {
           if (this._isHero(tower)) this.game.icons.hero(b.querySelector('canvas'), def, 40);
           else this.game.icons.tower(b.querySelector('canvas'), def, 40, this._variant(tower));
         }
-        const g = typeof a.icon === 'string' && a.icon.length <= 2 ? a.icon : '';
-        b.querySelector('.ab__glyph').textContent = g;
+        const ge = b.querySelector('.ab__glyph');
+        if (typeof a.icon === 'string' && a.icon.length > 2 && hasIcon('ab_' + a.icon)) {
+          ge.innerHTML = icon('ab_' + a.icon);
+          ge.classList.add('ab__glyph--svg');
+        } else ge.textContent = typeof a.icon === 'string' && a.icon.length <= 2 ? a.icon : '';
         frag.appendChild(b);
         this._abilityEls.set(a.id, { el: b, sweep: b.querySelector('.ab__sweep'), count: b.querySelector('.ab__count'), cd: b.querySelector('.ab__cd') });
       });
@@ -1329,6 +1381,7 @@ export class UI {
     const sh = t.maxShield > 0 ? Math.max(0, (t.shield || 0) / t.maxShield) : 0;
     setVar(this.$titanShield, '--fill', sh.toFixed(4));
     setHidden(this.$titanShield, !(t.maxShield > 0));
+    setHidden(this.$titanShieldIco, !(t.maxShield > 0 && t.shield > 0) || !this.$titanShieldIco.firstElementChild);
     setText(this.$titanNum, `${short(Math.max(0, t.hp))} / ${short(t.maxHp)}${t.maxShield > 0 && t.shield > 0 ? `  +${short(t.shield)} shield` : ''}`);
   }
 
@@ -1404,7 +1457,9 @@ export class UI {
     const key = type === this._heroId() ? 'U' : (def.hotkey || '').toUpperCase();
     const facts = [];
     if (dt) facts.push(`<span class="chip chip--dtype" style="--chip:var(--dt-${dt.toLowerCase()}, #9fb0cf)">${esc(dtypeLabel(dt))}</span>`);
-    if (Number.isFinite(range)) facts.push(`<span class="tip__fact">Range ${range >= 5000 ? 'global' : int(range)}</span>`);
+    if (range === Infinity || Number.isFinite(range)) facts.push(`<span class="tip__fact">Range ${range >= 5000 ? 'global' : int(range)}</span>`);
+    const aura = def.base?.aura?.radius;
+    if (Number.isFinite(aura) && aura > 0) facts.push(`<span class="tip__fact">Aura ${int(aura)}</span>`);
     if (det) facts.push('<span class="tip__fact tip__fact--det">Detection</span>');
     this.$tip.innerHTML = `
       <div class="tip__head"><span class="tip__name">${esc(def.name)}</span>${key ? `<kbd>${esc(key)}</kbd>` : ''}</div>

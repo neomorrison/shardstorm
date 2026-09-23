@@ -7,8 +7,10 @@
 //                                              //   placing: { type, x, y, valid, def?, range? } | null,
 //                                              //   showAllRanges, aimingTowerId,
 //                                              //   settings: { particles, shake, floatText, reducedMotion } }
-//   r.setSettings({ particles, shake, floatText, reducedMotion })
+//   r.setSettings({ particles: 'low'|'medium'|'high', shake, floatText, reducedMotion })
 //   r.setInsets({ top, right, bottom, left })  // CSS px covered by overlaid UI (HUD bar, drawer)
+//   r.zoomAt(factor, px, py) / r.setZoom(z, px, py) / r.panBy(dx, dy) / r.resetView()
+//   r.zoom, r.maxZoom                           // view control (pinch, wheel, drag), clamped to the world
 //   r.screenToWorld(px, py) / r.worldToScreen(x, y)   // CSS px relative to the canvas
 //   r.clientToWorld(clientX, clientY)                 // viewport coords (MouseEvent.clientX/Y)
 //   r.stats                                           // { enemies, projectiles, particles, drawMs, governor }
@@ -16,18 +18,20 @@
 // UI helpers (draw into any 2D context, centered in a size x size box):
 //   drawTowerIcon(ctx, towerDef, size, variant = 0, assets?), drawHeroIcon(ctx, heroDef, size, assets?),
 //   drawEnemyIcon(ctx, type, size, mods = {}, assets?), drawTitanIcon(ctx, kind, size, assets?)
+//   renderMapPreview(canvas, map, cssW, cssH, assets?)   // map card art from the real static layer
 //
 // Performance: every entity is drawn from pre-rendered sprites packed into atlas pages (so the
 // GPU can batch), pre-rotated into frames where they spin or aim (so draws need no transform
 // change), no shadowBlur at draw time, pooled and capped particles, off-screen culling, and a
 // load governor that thins effects when frames get expensive.
 
-import { Camera } from './camera.js';
-import { SpriteCache, EMPTY_ASSETS, imageSprite, facingOffset, drawSprite } from './sprites.js';
+import { Camera, WORLD_W, WORLD_H } from './camera.js';
+import { SpriteCache, EMPTY_ASSETS, imageSprite, imageShadow, imageMeta, facingOffset, drawSprite, quantizeK } from './sprites.js';
 import * as P from './procedural.js';
-import { Particles, shardColors } from './particles.js';
+import { Particles, shardColors, EXPLOSION_COLORS } from './particles.js';
 import { buildLanes, placePortals, buildStaticLayer, CORE_R } from './channel.js';
 import { ENEMIES } from '../data/enemies.js';
+import { CORE_KEEPOUT, BOUNDS_MARGIN } from '../sim/game.js';
 
 export { loadAssets } from './sprites.js';
 
@@ -40,6 +44,17 @@ const PROJ_FRAMES = 32;
 // Visual scale over sim radii (hitboxes are unchanged).
 const METEOR_VIS = 1.3;
 const TOWER_VIS = 1.12;
+// Zoom: sprite density cap (device px per world unit; the art has no more detail than this),
+// static layer pixel budget, and how long after the last zoom step caches stay frozen.
+const SPRITE_K_MAX = 3.2;
+const STATIC_BUDGET = 8.5e6;
+const STATIC_BUDGET_SMALL = 5.5e6;
+const ZOOM_SETTLE_MS = 180;
+// Image towers: silhouette area radius as a multiple of the footprint radius.
+const TOWER_ART_R = 1.3;
+// Commanders: silhouette area radius as a multiple of the footprint radius (the figure stands
+// taller than a turret, its pedestal on the footprint).
+const HERO_ART_R = 1.3;
 
 // Optional registries for placement ghosts (tower type -> def). Loaded lazily; main.js can
 // also pass them with renderer.setDefs({ towers, heroes }).
@@ -52,7 +67,15 @@ const DTYPE_COLORS = {
   KINETIC: '#fff2c4', BLAST: '#ffb347', THERMAL: '#ff7a3d', CRYO: '#bff4ff', ENERGY: '#7fe9ff', VOID: '#c77dff',
 };
 const HITSCAN_VISUALS = new Set(['slug', 'rail', 'hitscan', 'tracer', 'snipe', 'railslug']);
-const ADD_ONLY_VISUALS = new Set(['orb', 'plasma', 'flame']);
+const ADD_ONLY_VISUALS = new Set(['orb', 'plasma', 'flame', 'plasmaorb']);
+// Stroke width multipliers for chain lightning looks (zap events may also carry `width`).
+const ZAP_WIDTH = { arcweb: 1.1, stormcrown: 1.55, overload: 1.35, zeus: 2.4 };
+// Colours for ability flourishes (abilityFx ids; a trailing level digit is ignored).
+const ABILITY_FX_COLORS = {
+  hurricane: '#8ee6ff', maelstrom: '#c9f2ff', carpet: '#ff9f43', absolutezero: '#dff8ff', zeus: '#fff6c2',
+  bombingrun: '#ff9a3a', barrage: '#ff6b5d', blackhole: '#b86bff', warcouncil: '#ffd76a',
+  overcharge: '#ffe28a', orbital: '#9ff4ff', emp: '#8ff0ff', supernova: '#ffffff', rocketbarrage: '#ffb347', punch: '#ff8c2a',
+};
 const TITAN_KINDS = new Set(['maw', 'aegis', 'rift']);
 // Manifest keys that differ from the tower id (the art pipeline names the Rail Sniper 'sniper').
 const SPRITE_ALIAS = { rail: 'tower_sniper' };
@@ -64,6 +87,11 @@ function frameOf(angle, n) {
   if (f < 0) f += n;
   return f;
 }
+
+// Real seconds (drives debounces that must run while the game is paused).
+function rnow() { return ((typeof performance !== 'undefined') ? performance.now() : Date.now()) / 1000; }
+
+function qualityOf(q) { return q === 'low' || q === 'medium' ? q : 'high'; }
 
 function idHash(id) {
   if (typeof id === 'number') { let h = Math.imul(id | 0, 2654435761) >>> 0; h ^= h >>> 15; return h / 4294967296; }
@@ -93,6 +121,7 @@ export class Renderer {
     this.settings = { particles: 'high', shake: true, floatText: true };
     this.zaps = [];
     this.tracers = [];
+    this.persist = [];         // timed ground effects (black holes)
     this.coreHurt = 0;
     this.leakFlash = 0;
     this.whiteFlash = 0;
@@ -134,14 +163,15 @@ export class Renderer {
     this._pjSpr.clear();
     this._rotSpr.clear();
     if (this._timg) this._timg.clear();
+    if (this._tart) this._tart.clear();
     if (this._eimg) this._eimg.clear();
     this.staticDirty = true;
   }
 
-  // s: { particles: 'low'|'high', shake: bool, floatText: bool, reducedMotion: bool }
+  // s: { particles: 'low'|'medium'|'high', shake: bool, floatText: bool, reducedMotion: bool }
   setSettings(s = {}) {
     if (!s) return;
-    if ('particles' in s) this.settings.particles = s.particles === 'low' ? 'low' : 'high';
+    if ('particles' in s) this.settings.particles = qualityOf(s.particles);
     if ('shake' in s) this.settings.shake = s.shake !== false && s.shake !== 0;
     if ('floatText' in s) this.settings.floatText = s.floatText !== false && s.floatText !== 0;
     if ('reducedMotion' in s) this.settings.reducedMotion = !!s.reducedMotion;
@@ -167,6 +197,7 @@ export class Renderer {
     this.particles.clear();
     this.zaps.length = 0;
     this.tracers.length = 0;
+    this.persist.length = 0;
     this.hpTrack.clear();
     this.recoil.clear();
     this.towerSnap.clear();
@@ -174,9 +205,22 @@ export class Renderer {
     this.lastLives = null;
     this.lastSimTime = null;
     this.camera.trauma = 0;
+    this.camera.resetView();
     this._computeShared();
     this.camera.sync();
     this._rebuildStatic();
+  }
+
+  // View control (pinch, wheel and drag). px, py are CSS px relative to the canvas. The
+  // camera clamps so the world always fills the view; zoom 1 is the plain fit.
+  zoomAt(factor, px, py) { this._syncNow(); return this.camera.zoomBy(factor, px, py); }
+  setZoom(z, px, py) { this._syncNow(); return this.camera.setZoom(z, px, py); }
+  panBy(dx, dy) { return this.camera.panBy(dx, dy); }
+  resetView() { return this.camera.resetView(); }
+  get zoom() { return this.camera.zoom; }
+  get maxZoom() { return this.camera.maxZoom; }
+  _syncNow() {
+    if (this._needsSync) { this._needsSync = false; if (this.camera.sync()) { this.staticDirty = true; this.staticDirtyAt = rnow(); } }
   }
 
   screenToWorld(px, py) { return this.camera.screenToWorld(px, py); }
@@ -189,7 +233,7 @@ export class Renderer {
     if (!events || !events.length) return;
     const sim = this.sim;
     const pt = this.particles;
-    let hits = 0, shots = 0, pops = 0, blocked = 0, explodes = 0;
+    let hits = 0, shots = 0, pops = 0, blocked = 0, explodes = 0, pulses = 0;
     const floatText = this.settings.floatText !== false;
     for (let i = 0; i < events.length; i++) {
       const e = events[i];
@@ -232,13 +276,39 @@ export class Renderer {
           break;
         }
         case 'explode': {
+          if (e.visual === 'blackhole' && Number.isFinite(e.x)) {
+            const r = e.r || 110;
+            pt.ring(e.x, e.y, r * 1.4, r * 0.1, 0.45, '#b86bff', 6, 1, true);
+            pt.glow(e.x, e.y, r, '#7b2cff', 0.5, 0.6, 0.5);
+            pt.sparks(e.x, e.y, '#e2c8ff', 14, 260, 10, 0.35);
+            this.shake(0.3);
+            break;
+          }
           if (explodes++ > 24) break;
           const r = e.r || 40;
+          // Many blasts on one spot (a rapid mortar, a barrage) would stack their additive
+          // flashes into a white blob: repeats within 0.25 s draw only a ring and sparks.
+          const rec = this._expRecent || (this._expRecent = []);
+          let repeat = false;
+          for (let k = rec.length - 1; k >= 0; k--) {
+            const q = rec[k];
+            if (this.time - q.t > 0.25) { rec.splice(k, 1); continue; }
+            const dx = q.x - e.x, dy = q.y - e.y, rr = Math.max(q.r, r) * 0.6;
+            if (dx * dx + dy * dy < rr * rr) { repeat = true; break; }
+          }
+          if (repeat) {
+            const pal = EXPLOSION_COLORS[e.dtype] || EXPLOSION_COLORS.BLAST;
+            pt.ring(e.x, e.y, r * 0.3, r, 0.25, pal.ring, Math.max(2, r * 0.06), 0.6, true);
+            pt.sparks(e.x, e.y, pal.spark, 3, 160 + r * 2, 6, 0.25);
+            break;
+          }
+          rec.push({ x: e.x, y: e.y, r, t: this.time });
+          if (rec.length > 32) rec.shift();
           pt.explosion(e.x, e.y, r, e.dtype || 'BLAST');
           if (r >= 70) this.shake(Math.min(0.35, r / 500));
           break;
         }
-        case 'zap': this._addZap(e.points, e.color); break;
+        case 'zap': this._addZap(e.points, e.color, e.width || ZAP_WIDTH[e.visual] || 1); break;
         case 'freeze': {
           const r = e.r || 80;
           pt.ring(e.x, e.y, r * 0.15, r, 0.45, '#dff8ff', 4, 0.95, true);
@@ -317,19 +387,77 @@ export class Renderer {
         }
         case 'pulse': {
           if (events[i + 1] && events[i + 1].t === 'freeze') break; // the frost ring covers it
+          if (!Number.isFinite(e.x)) break;
           const r = e.r || 60;
           const col = e.color || DTYPE_COLORS[e.dtype] || '#bff4ff';
-          pt.ring(e.x, e.y, r * 0.2, r, 0.35, col, 3, 0.8, true);
-          pt.glow(e.x, e.y, r * 0.8, col, 0.22, 0.25, 1.15);
+          switch (e.visual) {
+            case 'fire': {
+              // burning ground: a low orange glow with embers and licks of smoke, no thin ring
+              if (pulses++ > 24) break;
+              // overlapping patches on one spot keep their embers but share one glow
+              const fr = this._fireRecent || (this._fireRecent = []);
+              let lit = false;
+              for (let k = fr.length - 1; k >= 0; k--) {
+                const q = fr[k];
+                if (this.time - q.t > 0.6) { fr.splice(k, 1); continue; }
+                const dx = q.x - e.x, dy = q.y - e.y;
+                if (dx * dx + dy * dy < r * r * 0.36) { lit = true; break; }
+              }
+              if (!lit) {
+                fr.push({ x: e.x, y: e.y, t: this.time });
+                if (fr.length > 24) fr.shift();
+                pt.glow(e.x, e.y, r * 1.1, '#ff6a1a', 0.8, 0.24, 1.05);
+                pt.glow(e.x, e.y, r * 0.6, '#ffc36a', 0.55, 0.2, 1.1);
+              }
+              pt.embers(e.x, e.y, Math.max(3, Math.round(r / 14)), 70, '#ffb347');
+              if (Math.random() < 0.6) pt.smoke(e.x + (Math.random() - 0.5) * r, e.y + (Math.random() - 0.5) * r * 0.6, r * 0.25, 0.9, '#4a3a36', 0, -18, 0.35);
+              break;
+            }
+            case 'implode': {
+              pt.ring(e.x, e.y, r, r * 0.12, 0.4, col, 4, 0.95, true);
+              pt.glow(e.x, e.y, r * 0.5, col, 0.3, 0.45, 0.6);
+              break;
+            }
+            case 'surge': {
+              pt.ring(e.x, e.y, r, r * 0.2, 0.55, '#4de8e0', 6, 0.9, true);
+              pt.ring(e.x, e.y, r * 0.8, r * 0.1, 0.45, '#b8fff9', 2.5, 0.8, true);
+              break;
+            }
+            case 'blackhole': {
+              // the black hole itself is drawn as a persistent ground effect; add inward sparks
+              pt.ring(e.x, e.y, r * 1.6, r * 0.3, 0.3, '#9b5cff', 2, 0.6, true);
+              break;
+            }
+            case 'radar': {
+              pt.ring(e.x, e.y, r * 0.1, r, 0.5, '#7dfcff', 2, 0.55, true);
+              break;
+            }
+            case 'refinery': {
+              pt.ring(e.x, e.y, r * 0.4, r, 0.45, '#ffd76a', 2.5, 0.8, true);
+              pt.stars(e.x, e.y, 3, '#ffe28a', 70, 4);
+              break;
+            }
+            default:
+              pt.ring(e.x, e.y, r * 0.2, r, 0.35, col, 3, 0.8, true);
+              pt.glow(e.x, e.y, r * 0.8, col, 0.22, 0.25, 1.15);
+          }
           break;
         }
         case 'abilityFx': {
           if (!Number.isFinite(e.x)) break;
           const r = e.r || 160;
-          pt.ring(e.x, e.y, 10, r, 0.8, '#ffe28a', 6, 1, true);
+          const id = String(e.id || '').replace(/\d+$/, '');
+          const col = ABILITY_FX_COLORS[id] || '#ffe28a';
+          if (id === 'blackhole') {
+            this.persist.push({ kind: 'blackhole', x: e.x, y: e.y, r, life: 3.1, max: 3.1, seed: Math.random() * 6 });
+            pt.glow(e.x, e.y, r * 1.2, '#7b2cff', 0.6, 0.7, 0.4);
+            this.shake(0.25);
+            break;
+          }
+          pt.ring(e.x, e.y, 10, r, 0.8, col, 6, 1, true);
           pt.ring(e.x, e.y, 10, r * 0.6, 0.6, '#ffffff', 3, 0.8, true);
-          pt.glow(e.x, e.y, Math.min(260, r * 0.7), '#ffd76a', 0.45, 0.6, 1.3);
-          pt.stars(e.x, e.y, 16, '#ffe28a', 240, 7);
+          pt.glow(e.x, e.y, Math.min(260, r * 0.7), col, 0.45, 0.6, 1.3);
+          pt.stars(e.x, e.y, 16, col, 240, 7);
           this.shake(0.15);
           break;
         }
@@ -390,7 +518,8 @@ export class Renderer {
         }
         case 'vault': {
           if (!floatText || !Number.isFinite(e.x) || !(e.amount > 0)) break;
-          this._cashText(e.x, e.y - 20, e.amount, 'vault');
+          // sits above the rig's own payout text (a full vault pays the overflow as cash)
+          this._cashText(e.x, e.y - 44, e.amount, 'vault');
           break;
         }
         case 'ability': {
@@ -447,11 +576,14 @@ export class Renderer {
     const t0 = (typeof performance !== 'undefined') ? performance.now() : 0;
     ui = ui || {};
     const dt = Math.max(0, Math.min(0.1, frameDt || 0));
+    const rn = rnow();
+    this._rdt = this._rlast ? Math.max(0, Math.min(0.1, rn - this._rlast)) : 0;
+    this._rlast = rn;
     this.time += dt;
     this.frame++;
     if (ui.settings) {
       const s = ui.settings;
-      if (s.particles !== undefined) this.settings.particles = s.particles === 'low' ? 'low' : 'high';
+      if (s.particles !== undefined) this.settings.particles = qualityOf(s.particles);
       if (s.shake !== undefined) this.settings.shake = s.shake !== false && s.shake !== 0;
       const ft = s.floatText ?? s.cashText ?? s.floatingText ?? s.damageNumbers;
       if (ft !== undefined) this.settings.floatText = ft !== false && ft !== 0;
@@ -481,9 +613,19 @@ export class Renderer {
     const dprNow = Math.min(2, Math.max(1, (typeof window !== 'undefined' && window.devicePixelRatio) || 1));
     if (this._needsSync || !this._ro || dprNow !== cam.dpr) {
       this._needsSync = false;
-      if (cam.sync()) { this.staticDirty = true; this.staticDirtyAt = this.time; }
+      if (cam.sync()) { this.staticDirty = true; this.staticDirtyAt = rnow(); }
     }
-    const kq = this.cache.setK(cam.k);
+    // Sprite density follows the camera, but holds still while a zoom gesture is in flight
+    // (sprites just scale until it settles) and stops growing where the art runs out of
+    // pixels, so zooming never re-rasterizes every sprite per frame.
+    const nowMs = (typeof performance !== 'undefined') ? performance.now() : 0;
+    const zooming = nowMs - cam.zoomedAt < ZOOM_SETTLE_MS;
+    if (!zooming || !this._kWant) this._kWant = Math.min(cam.k, SPRITE_K_MAX);
+    // The static layer (terrain + channel) is rebuilt at the new zoom once the gesture settles.
+    if (this.static && !zooming && Math.abs(this._staticK() - this.static.k) > 0.01 * this.static.k) {
+      if (!this.staticDirty) { this.staticDirty = true; this.staticDirtyAt = -1; }
+    }
+    const kq = this.cache.setK(this._kWant);
     // Pack sprites created last frame into the atlas before anything draws this frame.
     this.cache.flush();
     if (kq !== this._sprK) { this._sprK = kq; this._mSpr.clear(); this._pjSpr.clear(); this._rotSpr.clear(); }
@@ -491,10 +633,12 @@ export class Renderer {
       this.assetVersion = this.assets.version || 0;
       this.cache.clear(); this._mSpr.clear(); this._pjSpr.clear(); this._rotSpr.clear();
       if (this._timg) this._timg.clear();
+      if (this._tart) this._tart.clear();
       if (this._eimg) this._eimg.clear();
       this.staticDirty = true; this.staticDirtyAt = -1;
     }
-    if (this.staticDirty && (!this.static || this.time - this.staticDirtyAt > 0.12)) this._rebuildStatic();
+    // Debounced on real time (a resize while paused still settles).
+    if (this.staticDirty && (!this.static || rnow() - this.staticDirtyAt > 0.12)) this._rebuildStatic();
 
     // Lives tracking for the core flicker
     if (st) {
@@ -528,6 +672,7 @@ export class Renderer {
     this._drawChevrons(ctx);
     this._drawPortals(ctx);
     this._drawCore(ctx, st);
+    this._drawNoBuild(ctx, st, ui);
     this._drawRanges(ctx, st, ui);
     if (mark) mark('channelCore');
     this._drawTowers(ctx, st, ui);
@@ -597,14 +742,36 @@ export class Renderer {
     }
   }
 
+  // The static layer covers the whole zoom-1 view (plus a shake margin), so panning never
+  // rebuilds it. Its density matches the camera, capped by a pixel budget when zoomed in.
+  _staticFrame() {
+    const cam = this.camera;
+    const f = cam.fitView, m = 24 / Math.max(1e-6, cam.fitScale);
+    return { x0: f.x0 - m, y0: f.y0 - m, x1: f.x1 + m, y1: f.y1 + m };
+  }
+
+  _staticK() {
+    const cam = this.camera;
+    if (!cam.zoomed) return cam.k;
+    const r = this._staticFrame();
+    const fitK = cam.fitScale * cam.dpr;
+    // Phones get a smaller budget (canvas memory is tight there).
+    const budget = cam.cssW * cam.cssH < 700000 ? STATIC_BUDGET_SMALL : STATIC_BUDGET;
+    return Math.max(fitK, Math.min(cam.k, Math.sqrt(budget / ((r.x1 - r.x0) * (r.y1 - r.y0)))));
+  }
+
   _rebuildStatic() {
     this.staticDirty = false;
     const cam = this.camera;
     if (!cam.w || !cam.h) return;
     const pad = ((this.map && this.map.pathWidth) || 56) * 0.9;
-    this.portals = placePortals(this.lanes, cam.view, pad);
+    this.portals = placePortals(this.lanes, cam.fitView, pad);
+    const frame = { ...this._staticFrame(), k: this._staticK(), dpr: cam.dpr };
     try {
-      this.static = buildStaticLayer({ map: this.map, lanes: this.lanes, camera: cam, assets: this.assets, portals: this.portals });
+      const s = buildStaticLayer({ map: this.map, lanes: this.lanes, frame, assets: this.assets, portals: this.portals });
+      if (this.static && this.static.canvas && this.static.canvas !== s.canvas) { this.static.canvas.width = 1; this.static.canvas.height = 1; }
+      this.static = s;
+      this._noBuild = null;
     } catch (err) {
       console.error('static layer failed', err);
       this.static = null;
@@ -691,7 +858,7 @@ export class Renderer {
     }
   }
 
-  _addZap(points, color) {
+  _addZap(points, color, width = 1) {
     if (!Array.isArray(points) || points.length < 2) return;
     const jag = (pts) => {
       const out = [];
@@ -712,7 +879,8 @@ export class Renderer {
       return out;
     };
     const pts = points.map((p) => (Array.isArray(p) ? p : [p.x, p.y]));
-    this.zaps.push({ a: jag(pts), b: jag(pts), nodes: pts, life: 0.22, max: 0.22, color: color || '#9ff4ff' });
+    const life = width >= 2 ? 0.34 : 0.22;
+    this.zaps.push({ a: jag(pts), b: jag(pts), nodes: pts, life, max: life, color: color || '#9ff4ff', w: width });
     if (this.zaps.length > 90) this.zaps.shift();
     const last = pts[pts.length - 1];
     this.particles.sparks(last[0], last[1], '#bff8ff', 2, 160, 5, 0.14);
@@ -746,6 +914,11 @@ export class Renderer {
   }
 
   _updateFx(dt) {
+    for (let i = this.persist.length - 1; i >= 0; i--) {
+      const f = this.persist[i];
+      f.life -= dt;
+      if (f.life <= 0) this.persist.splice(i, 1);
+    }
     for (let i = this.zaps.length - 1; i >= 0; i--) {
       const z = this.zaps[i];
       z.life -= dt;
@@ -815,17 +988,30 @@ export class Renderer {
       ctx.fillRect(0, 0, cam.w, cam.h);
       return;
     }
+    // Layer pixel = s.ox + x * s.k; screen pixel = cam.ox + shake + x * cam.k.
     const f = cam.k / s.k;
-    if (Math.abs(f - 1) < 1e-6 && Math.abs(cam.ox + s.m - s.ox) < 0.5 && Math.abs(cam.oy + s.m - s.oy) < 0.5) {
-      ctx.drawImage(s.canvas, Math.round(-s.m + cam.shakeX), Math.round(-s.m + cam.shakeY));
+    const tx = cam.ox + cam.shakeX - s.ox * f, ty = cam.oy + cam.shakeY - s.oy * f;
+    const cw = s.canvas.width, ch = s.canvas.height;
+    if (Math.abs(f - 1) < 1e-6) {
+      const ix = Math.round(tx), iy = Math.round(ty);
+      if (ix > 0 || iy > 0 || ix + cw < cam.w || iy + ch < cam.h) this._fillGround(ctx);
+      ctx.drawImage(s.canvas, ix, iy);
     } else {
-      // Stale layer during a resize: map its world transform onto the current one.
-      const pal = (this.map && this.map.palette) || {};
-      ctx.fillStyle = pal.ground2 || '#2a303e';
-      ctx.fillRect(0, 0, cam.w, cam.h);
-      const tx = cam.ox - s.ox * f + cam.shakeX, ty = cam.oy - s.oy * f + cam.shakeY;
-      ctx.drawImage(s.canvas, tx, ty, s.canvas.width * f, s.canvas.height * f);
+      // Zoomed (or a stale layer during a resize or zoom gesture): blit only the visible part.
+      const sx0 = Math.max(0, -tx / f), sy0 = Math.max(0, -ty / f);
+      const sx1 = Math.min(cw, (cam.w - tx) / f), sy1 = Math.min(ch, (cam.h - ty) / f);
+      if (sx0 > 0.5 || sy0 > 0.5 || tx + cw * f < cam.w - 0.5 || ty + ch * f < cam.h - 0.5) this._fillGround(ctx);
+      if (sx1 > sx0 && sy1 > sy0) ctx.drawImage(s.canvas, sx0, sy0, sx1 - sx0, sy1 - sy0, tx + sx0 * f, ty + sy0 * f, (sx1 - sx0) * f, (sy1 - sy0) * f);
     }
+    // Screen vignette (a small cached gradient stretched over the canvas).
+    const vg = this._vignette || (this._vignette = makeVignette());
+    ctx.drawImage(vg, 0, 0, cam.w, cam.h);
+  }
+
+  _fillGround(ctx) {
+    const pal = (this.map && this.map.palette) || {};
+    ctx.fillStyle = pal.ground2 || '#2a303e';
+    ctx.fillRect(0, 0, this.camera.w, this.camera.h);
   }
 
   _drawChevrons(ctx) {
@@ -961,6 +1147,70 @@ export class Renderer {
     ctx.globalCompositeOperation = 'source-over';
   }
 
+  // While placing: shade every spot the tower's center cannot use (the channel, blockers,
+  // the Core keep-out, other towers and the edges), expanded by the tower's radius, so the
+  // free ground is obvious. Shapes go into one mask so overlaps never double up.
+  _drawNoBuild(ctx, st, ui) {
+    const pl = ui.placing;
+    const target = pl ? 1 : 0;
+    this._nbA = (this._nbA || 0) + (target - (this._nbA || 0)) * Math.min(1, (this._rdt || 0.016) * 12);
+    if (this._nbA < 0.02 || !this.map) return;
+    const def = pl ? (pl.def || this.towerDef(pl.type)) : this._nbDef;
+    if (pl) this._nbDef = def;
+    const r = (def && def.radius) || 22;
+    const cam = this.camera;
+    let c = this._nbCanvas;
+    if (!c) c = this._nbCanvas = document.createElement('canvas');
+    if (c.width !== cam.w || c.height !== cam.h) { c.width = cam.w; c.height = cam.h; }
+    const g = c.getContext('2d');
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.globalCompositeOperation = 'source-over';
+    g.clearRect(0, 0, cam.w, cam.h);
+    g.setTransform(this.k, 0, 0, this.k, this.ox, this.oy);
+    g.fillStyle = '#000';
+    g.strokeStyle = '#000';
+    g.lineCap = 'round';
+    g.lineJoin = 'round';
+    // Channel
+    const pw = ((this.map.pathWidth) || 56) + r * 2;
+    g.lineWidth = pw;
+    g.beginPath();
+    for (const L of this.lanes) {
+      g.moveTo(L.xs[0], L.ys[0]);
+      for (let i = 2; i < L.n; i += 2) g.lineTo(L.xs[i], L.ys[i]);
+      g.lineTo(L.xs[L.n - 1], L.ys[L.n - 1]);
+    }
+    g.stroke();
+    // Blockers, Core, towers
+    g.beginPath();
+    for (const b of this.map.blockers || []) { g.moveTo(b.x + b.r + r, b.y); g.arc(b.x, b.y, b.r + r, 0, TAU); }
+    const core = this.map.core;
+    if (core) { g.moveTo(core.x + CORE_KEEPOUT + r, core.y); g.arc(core.x, core.y, CORE_KEEPOUT + r, 0, TAU); }
+    for (const t of st.towers) { const rr = (t.radius || 22) + r; g.moveTo(t.x + rr, t.y); g.arc(t.x, t.y, rr, 0, TAU); }
+    g.fill();
+    // Edges (outside the buildable world rectangle)
+    const m = BOUNDS_MARGIN + r, v = cam.view;
+    g.beginPath();
+    g.rect(v.x0 - 50, v.y0 - 50, v.x1 - v.x0 + 100, v.y1 - v.y0 + 100);
+    g.rect(WORLD_W - m, m, -(WORLD_W - m * 2), WORLD_H - m * 2);
+    g.fill('evenodd');
+    // Tint + hatch through the mask
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    g.globalCompositeOperation = 'source-in';
+    g.fillStyle = 'rgba(255,70,90,0.16)';
+    g.fillRect(0, 0, cam.w, cam.h);
+    g.globalCompositeOperation = 'source-atop';
+    const hp = this._hatch || (this._hatch = makeHatch());
+    const pat = this._hatchPat || (this._hatchPat = g.createPattern(hp, 'repeat'));
+    g.fillStyle = pat;
+    g.fillRect(0, 0, cam.w, cam.h);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    this._tfWorld = false;
+    ctx.globalAlpha = Math.min(1, this._nbA);
+    ctx.drawImage(c, 0, 0);
+    ctx.globalAlpha = 1;
+  }
+
   _rangeOf(t, def) {
     const s = t.stats || {};
     let r = s.range;
@@ -1066,6 +1316,44 @@ export class Renderer {
     return found;
   }
 
+  // Layout of an image tower: drawn size (longest side, world units), anchor, rotation and
+  // the cached sprites. Towers are sized by the area of their silhouette so a slim upgrade
+  // look (long barrel, thin mast) keeps a base as big as the chunky base model; they turn
+  // about the centroid of their thick core so barrels swing and the base stays put.
+  // Commanders stand on the footprint by their pedestal and never rotate.
+  _towerArt(def, variant, hero) {
+    const key = this._towerImageKey(def, variant, hero);
+    if (!key) return null;
+    const ck = key + '|' + (def.radius || 22) + '|' + (hero ? 1 : 0);
+    const cache = this._tart || (this._tart = new Map());
+    let a = cache.get(ck);
+    if (a && a.k === this._sprK) return a;
+    const spec = this.assets.get(key);
+    if (!spec) return null;
+    const meta = imageMeta(spec);
+    const fr = def.radius || 22;
+    let size, pivot, rotates;
+    if (hero) {
+      size = Math.round(Math.max(fr * 3.6, Math.min(fr * 5, (fr * HERO_ART_R) / Math.max(0.12, meta.bodyR))));
+      pivot = { x: meta.foot.x, y: meta.foot.y - 0.035 };
+      rotates = false;
+    } else {
+      const want = (fr * TOWER_ART_R) / Math.max(0.12, meta.bodyR);
+      size = Math.round(Math.max(fr * 2.6, Math.min(fr * 4.4, want)));
+      pivot = meta.pivot;
+      rotates = !!spec.rotates && !(def.art && def.art.rotates === false);
+    }
+    const imgKey = key + '|' + (hero ? 'h' : 't');
+    a = {
+      k: this._sprK, key, spec, size, pivot, rotates, hero, fr,
+      rot0: rotates ? facingOffset(spec.facing) : 0,
+      spr: imageSprite(this.cache, imgKey, spec, size, pivot),
+      shadow: imageShadow(this.cache, imgKey, spec, size, pivot, hero ? 0.45 : 0.55, 0.035),
+    };
+    cache.set(ck, a);
+    return a;
+  }
+
   _enemyImage(type) {
     const c = this._eimg || (this._eimg = new Map());
     let v = c.get(type);
@@ -1073,6 +1361,7 @@ export class Renderer {
     return v;
   }
 
+  // Procedural tower sprites (used when a tower has no image art).
   _towerSprites(def, variant, tier, hero, r) {
     const id = def.id || def.name || 'tower';
     const band = tier >= 5 ? 5 : tier >= 4 ? 4 : tier >= 3 ? 3 : 0;
@@ -1086,51 +1375,101 @@ export class Renderer {
     return { base, head, spinner, gloss, style };
   }
 
+  // Soft contact shadow that seats a tower on the ground (world radius r).
+  _contactShadow(r) {
+    return this.cache.get('cshd|' + r, r * 2.6, r * 2.2, (g) => {
+      g.save();
+      g.scale(1, 0.72);
+      const gr = g.createRadialGradient(0, 0, r * 0.2, 0, 0, r * 1.25);
+      gr.addColorStop(0, 'rgba(0,0,0,0.5)');
+      gr.addColorStop(0.6, 'rgba(0,0,0,0.28)');
+      gr.addColorStop(1, 'rgba(0,0,0,0)');
+      g.fillStyle = gr;
+      g.beginPath(); g.arc(0, 0, r * 1.25, 0, TAU); g.fill();
+      g.restore();
+    });
+  }
+
+  // Ground ring that marks tier 3+ in the path color (tier 4 adds rim segments, gold at 5).
+  _tierRing(col, r, tier) {
+    return this.cache.get('tring2|' + col + '|' + r + '|' + tier, r * 3, r * 3, (g) => {
+      const rr = r * 1.22;
+      g.beginPath(); g.arc(0, 0, rr, 0, TAU);
+      g.lineWidth = r * 0.2; g.strokeStyle = 'rgba(6,8,16,0.55)'; g.stroke();
+      g.lineWidth = r * 0.085; g.strokeStyle = col; g.stroke();
+      if (tier >= 4) {
+        for (let i = 0; i < 6; i++) {
+          const a0 = (i / 6) * TAU + 0.18;
+          g.beginPath(); g.arc(0, 0, rr + r * 0.2, a0, a0 + 0.55);
+          g.lineWidth = r * 0.06; g.strokeStyle = tier >= 5 ? '#ffe28a' : col; g.stroke();
+        }
+      }
+      const gr = g.createRadialGradient(0, 0, rr * 0.7, 0, 0, rr * 1.12);
+      gr.addColorStop(0, P.rgba(col, 0)); gr.addColorStop(0.75, P.rgba(col, 0.22)); gr.addColorStop(1, P.rgba(col, 0));
+      g.fillStyle = gr; g.beginPath(); g.arc(0, 0, rr * 1.12, 0, TAU); g.fill();
+    });
+  }
+
   _drawTowers(ctx, st, ui) {
     const t = this.time;
     const pips = [];
     const badges = [];
-    for (const tw of st.towers) {
+    // Painter's order: lower on screen draws later, so tall art overlaps correctly.
+    const list = this._towerList || (this._towerList = []);
+    list.length = 0;
+    for (const tw of st.towers) list.push(tw);
+    list.sort((a, b) => a.y - b.y || a.id - b.id);
+    // Pass 1: ground (contact shadows, tier rings, tier 5 halos, drop shadows), so no tower's
+    // shadow ever falls on top of a neighbor.
+    const arts = this._towerArts || (this._towerArts = []);
+    let na = 0;
+    for (const tw of list) {
       const def = tw.def || this.towerDef(tw.type);
       if (!def) continue;
-      const r = Math.round((tw.radius || def.radius || 22) * TOWER_VIS * 2) / 2;
-      if (!this.camera.visible(tw.x, tw.y, r * 2)) continue;
+      const fr = tw.radius || def.radius || 22;
+      if (!this.camera.visible(tw.x, tw.y - fr, fr * 3.2)) continue;
       const levels = tw.levels || [0, 0, 0];
       const tier = Math.max(levels[0] || 0, levels[1] || 0, levels[2] || 0);
       const variant = P.towerVariant(def, levels);
       const hero = P.isHeroDef(def) || !!tw.hero;
-      // Tier 5 halo
+      const art = this._towerArt(def, variant, hero);
+      const ang = Number.isFinite(tw.angle) ? tw.angle : -Math.PI / 2;
+      const rec = this.recoil.get(tw.id) || 0;
+      // Color of the path that reached this tier (drives the ring and the tier 5 halo).
+      const pcol = P.PATH_COLORS[levels.indexOf(tier)] || '#ffd76a';
+      const E = arts[na] || (arts[na] = {});
+      na++;
+      E.tw = tw; E.def = def; E.fr = fr; E.levels = levels; E.tier = tier; E.variant = variant; E.hero = hero; E.art = art; E.ang = ang; E.rec = rec;
       if (tier >= 5) {
-        const col = variant ? P.PATH_COLORS[variant - 1] : '#ffd76a';
+        const col = pcol;
         ctx.globalCompositeOperation = 'lighter';
-        ctx.globalAlpha = 0.45 + 0.2 * Math.sin(t * 3 + idHash(tw.id) * 6);
-        this._spr(ctx, this._glowSprite(col), tw.x, tw.y, 0, (r * 2.1) / 32);
+        ctx.globalAlpha = 0.4 + 0.18 * Math.sin(t * 3 + idHash(tw.id) * 6);
+        this._spr(ctx, this._glowSprite(col), tw.x, tw.y, 0, (fr * 2.6) / 32);
         ctx.globalAlpha = 1;
         ctx.globalCompositeOperation = 'source-over';
       }
-      const imgKey = this._towerImageKey(def, variant, hero);
-      const img = imgKey ? this.assets.get(imgKey) : null;
-      const rotates = P.headRotates(def);
-      const ang = Number.isFinite(tw.angle) ? tw.angle : 0;
-      const rec = this.recoil.get(tw.id) || 0;
+      if (art) {
+        this._spr(ctx, this._contactShadow(Math.round(fr)), tw.x + fr * 0.08, tw.y + fr * 0.2);
+        if (tier >= 3 && !hero) this._spr(ctx, this._tierRing(pcol, Math.round(fr), Math.min(5, tier)), tw.x, tw.y);
+        const rot = art.rotates ? ang + art.rot0 : 0;
+        const sx = hero ? 0.2 : 0.16, sy = hero ? 0.12 : 0.26;
+        this._spr(ctx, art.shadow, tw.x + fr * sx, tw.y + fr * sy, rot);
+      }
+    }
+    // Pass 2: bodies
+    for (let i = 0; i < na; i++) {
+      const { tw, def, fr, levels, tier, variant, hero, art, ang, rec } = arts[i];
       const disabled = tw.disabledT > 0;
-      if (img) {
-        // Image towers: tier looks come from a path-colored plate ring under the art.
-        if (tier >= 3) {
-          const col = tier >= 5 ? '#ffd76a' : P.PATH_COLORS[Math.max(0, variant - 1)];
-          const ring = this.cache.get('tring|' + col + '|' + r, r * 2.8, r * 2.8, (g) => {
-            g.beginPath(); g.arc(0, 0, r * 1.18, 0, TAU);
-            g.lineWidth = r * 0.16; g.strokeStyle = P.INK; g.stroke();
-            g.lineWidth = r * 0.1; g.strokeStyle = col; g.stroke();
-          });
-          this._spr(ctx, ring, tw.x, tw.y, 0);
-        }
-        const s = imageSprite(this.cache, imgKey, img, img.size || r * 2.6);
-        const rot = img.rotates ? ang + facingOffset(img.facing) : 0;
-        const bx = img.rotates ? -Math.cos(ang) * rec * r * 0.1 : 0, by = img.rotates ? -Math.sin(ang) * rec * r * 0.1 : 0;
-        this._spr(ctx, s, tw.x + bx, tw.y + by, rot);
+      if (art) {
+        const rot = art.rotates ? ang + art.rot0 : 0;
+        const bx = art.rotates ? -Math.cos(ang) * rec * fr * 0.12 : 0, by = art.rotates ? -Math.sin(ang) * rec * fr * 0.12 : 0;
+        // Art that cannot turn gets a tiny squash when it fires instead of a kick.
+        const sc = !art.rotates && rec > 0 && !hero ? 1 - rec * 0.035 : 1;
+        this._spr(ctx, art.spr, tw.x + bx, tw.y + by, rot, sc);
       } else {
+        const r = Math.round(fr * TOWER_VIS * 2) / 2;
         const S = this._towerSprites(def, variant, tier, hero, r);
+        const rotates = P.headRotates(def);
         this._spr(ctx, S.base, tw.x, tw.y);
         let hr = rotates ? ang : (P.HEAD_SPIN[S.style] ? t * P.HEAD_SPIN[S.style] + idHash(tw.id) * 6 : 0);
         if (disabled) hr = rotates ? ang : 0;
@@ -1143,6 +1482,7 @@ export class Renderer {
         if (S.gloss) this._spr(ctx, S.gloss, tw.x + bx, tw.y + by);
       }
       if (disabled) {
+        const r = fr * 1.1;
         ctx.globalAlpha = 0.45;
         this._world(ctx);
         ctx.beginPath();
@@ -1151,31 +1491,73 @@ export class Renderer {
         ctx.fill();
         ctx.globalAlpha = 1;
         const spark = this.cache.get('stunstar', 10, 10, (g) => P.drawSparkStar(g, 4.5, '#b48cff'));
-        for (let i = 0; i < 3; i++) {
-          const a = t * 4 + (i / 3) * TAU;
+        for (let k = 0; k < 3; k++) {
+          const a = t * 4 + (k / 3) * TAU;
           this._spr(ctx, spark, tw.x + Math.cos(a) * r * 0.8, tw.y - r * 0.6 + Math.sin(a) * r * 0.3, a);
         }
       }
-      if (tier > 0) pips.push(tw, levels, r);
-      if (hero) badges.push(tw, r);
+      if (tier > 0 && !hero) pips.push(tw, levels, fr);
+      if (hero) badges.push(tw, fr, art);
     }
     // Pips and badges after all towers so neighbors never cover them.
     for (let i = 0; i < pips.length; i += 3) {
-      const tw = pips[i], levels = pips[i + 1], r = pips[i + 2];
+      const tw = pips[i], levels = pips[i + 1], fr = pips[i + 2];
       const key = 'pip|' + (levels[0] || 0) + (levels[1] || 0) + (levels[2] || 0);
       const s = this.cache.get(key, 44, 12, (g) => P.drawPips(g, levels, 2.3));
-      this._spr(ctx, s, tw.x, tw.y + r + 5);
+      this._spr(ctx, s, tw.x, tw.y + fr * 1.22 + 4);
     }
-    for (let i = 0; i < badges.length; i += 2) {
-      const tw = badges[i], r = badges[i + 1];
+    for (let i = 0; i < badges.length; i += 3) {
+      const tw = badges[i], fr = badges[i + 1], art = badges[i + 2];
       const lvl = tw.level ?? (tw.data && tw.data.level) ?? tw.heroLevel ?? (tw.hero && tw.hero.level) ?? tw.xpLevel ?? 1;
       const s = this.cache.get('badge|' + lvl, 22, 22, (g) => P.drawHeroBadge(g, 10, lvl));
-      this._spr(ctx, s, tw.x + r * 0.75, tw.y - r * 0.75);
+      if (art) this._spr(ctx, s, tw.x + fr * 0.95, tw.y + fr * 0.15);
+      else this._spr(ctx, s, tw.x + fr * 0.85, tw.y - fr * 0.85);
+    }
+  }
+
+  // Black holes: a dark core that swallows the channel, with a spinning violet accretion ring.
+  _drawPersist(ctx) {
+    if (!this.persist.length) return;
+    const t = this.time;
+    for (const f of this.persist) {
+      if (f.kind !== 'blackhole') continue;
+      const R = f.r;
+      const age = f.max - f.life;
+      const a = Math.min(1, age / 0.25, f.life / 0.35);
+      if (a <= 0) continue;
+      this._world(ctx);
+      const core = this.cache.get('bhcore|' + Math.round(R), R * 3, R * 3, (g) => {
+        const gr = g.createRadialGradient(0, 0, 0, 0, 0, R * 1.5);
+        gr.addColorStop(0, 'rgba(0,0,0,0.95)');
+        gr.addColorStop(0.42, 'rgba(6,0,18,0.9)');
+        gr.addColorStop(0.62, 'rgba(60,16,120,0.45)');
+        gr.addColorStop(1, 'rgba(40,10,90,0)');
+        g.fillStyle = gr;
+        g.beginPath(); g.arc(0, 0, R * 1.5, 0, TAU); g.fill();
+      });
+      ctx.globalAlpha = a;
+      this._spr(ctx, core, f.x, f.y, 0);
+      this._world(ctx);
+      ctx.globalCompositeOperation = 'lighter';
+      ctx.lineCap = 'round';
+      for (let k = 0; k < 3; k++) {
+        const rr = R * (0.55 + k * 0.17);
+        const spin = t * (3.2 - k * 0.7) + f.seed + k * 2.1;
+        ctx.beginPath();
+        ctx.ellipse(f.x, f.y, rr, rr * 0.82, 0.4, spin, spin + 2.4);
+        ctx.lineWidth = 4 - k;
+        ctx.strokeStyle = k === 0 ? 'rgba(226,200,255,0.9)' : 'rgba(155,92,255,0.75)';
+        ctx.globalAlpha = a * (0.9 - k * 0.2);
+        ctx.stroke();
+      }
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = 'source-over';
     }
   }
 
   _drawGroundFx(ctx, st) {
     const t = this.time;
+    this._drawPersist(ctx);
     for (const tw of st.towers) {
       const s = tw.stats;
       if (!s) continue;
@@ -1199,10 +1581,12 @@ export class Renderer {
           ctx.globalCompositeOperation = 'lighter';
           this._spr(ctx, disc, tw.x, tw.y, 0);
           this._world(ctx);
-          const pull = a.pull ? 1 : 0.6;
+          const tide = !!(atks.tide && atks.tide.pull > 0);
+          const pull = a.pull || tide ? 1.5 : 0.6;
           for (let i = 0; i < 3; i++) {
             const ph = (t * 0.45 * pull + i / 3 + idHash(tw.id)) % 1;
-            const rr = R * (1 - ph);
+            // an Undertow well shoves meteors back: its rings run outward
+            const rr = tide ? R * ph : R * (1 - ph);
             ctx.globalAlpha = Math.min(1, ph * 3) * (1 - ph) * 0.9;
             ctx.beginPath();
             ctx.arc(tw.x, tw.y, Math.max(1, rr), 0, TAU);
@@ -1252,6 +1636,40 @@ export class Renderer {
     return s;
   }
 
+  // Image meteor with its soft ground shadow and modifier overlays (bits: 1 phantom, 2 nanite,
+  // 4 plated) pre-composited, cached per type, size and modifier set.
+  _meteorImg(type, eimg, r, bits) {
+    const mk = 'img|' + type;
+    let byR = this._mSpr.get(mk);
+    if (!byR) { byR = new Map(); this._mSpr.set(mk, byR); }
+    let arr = byR.get(r);
+    if (!arr) { arr = []; byR.set(r, arr); }
+    let s = arr[bits];
+    if (!s) {
+      const size = eimg.size || r * 2.5;
+      const img = eimg.img;
+      const iw = img.naturalWidth || img.width || 1, ih = img.naturalHeight || img.height || 1;
+      const w = iw >= ih ? size : (size * iw) / ih, h = iw >= ih ? (size * ih) / iw : size;
+      const half = Math.max(w, h, r * 3) / 2 + r * 0.5;
+      s = arr[bits] = this.cache.get('m|img|' + type + '|' + r + '|' + bits, half * 2, half * 2, (g) => {
+        if (!(bits & 1)) {
+          const gr = g.createRadialGradient(r * 0.2, r * 0.35, 0, r * 0.2, r * 0.35, r * 1.1);
+          gr.addColorStop(0, 'rgba(0,0,0,0.42)'); gr.addColorStop(0.55, 'rgba(0,0,0,0.2)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
+          g.fillStyle = gr; g.beginPath(); g.arc(r * 0.2, r * 0.35, r * 1.1, 0, TAU); g.fill();
+        }
+        g.imageSmoothingEnabled = true;
+        g.imageSmoothingQuality = 'high';
+        if (bits & 1) g.globalAlpha = 0.62;
+        g.drawImage(img, -w / 2, -h / 2, w, h);
+        g.globalAlpha = 1;
+        if (bits & 4) P.drawPlatedRing(g, r);
+        if (bits & 2) P.drawNaniteSpecks(g, r);
+        if (bits & 1) P.drawPhantomRim(g, r);
+      });
+    }
+    return s;
+  }
+
   _drawEnemies(ctx, st) {
     const ships = [];
     const bars = [];
@@ -1262,7 +1680,7 @@ export class Renderer {
     const track = this.hpTrack;
     const frame = this.frame;
     let count = 0;
-    let shadowS = null, iceS = null, flameS = null, starS = null;
+    let iceS = null, flameS = null, starS = null;
     // Only touch globalAlpha when it changes (most meteors draw at 1).
     let ca = -1;
     const A = (v) => { if (v !== ca) { ctx.globalAlpha = v; ca = v; } };
@@ -1306,32 +1724,21 @@ export class Renderer {
       // Body
       const eimg = this._enemyImage(e.type);
       if (eimg) {
-        const size = eimg.size || r * 2.5;
-        const s = imageSprite(this.cache, 'enemy_' + e.type, eimg, size);
-        const irot = eimg.rotates ? theta : 0;
-        shadowS = shadowS || this.cache.get('mshadow', 24, 24, (g) => {
-          const gr = g.createRadialGradient(0, 0, 0, 0, 0, 10);
-          gr.addColorStop(0, 'rgba(0,0,0,0.45)'); gr.addColorStop(1, 'rgba(0,0,0,0)');
-          g.fillStyle = gr; g.beginPath(); g.arc(0, 0, 10, 0, TAU); g.fill();
-        });
-        if (!phantom) { A(); this._spr(ctx, shadowS, x + r * 0.2, y + r * 0.35, 0, r / 9); }
-        A();
-        this._spr(ctx, s, x, y, irot);
-        if (bits) {
-          A();
-          const ov = this.cache.get('mods|' + bits + '|' + r, r * 3, r * 3, (g) => {
-            if (bits & 4) P.drawPlatedRing(g, r);
-            if (bits & 2) P.drawNaniteSpecks(g, r);
-            if (bits & 1) P.drawPhantomRim(g, r);
-          });
-          this._spr(ctx, ov, x, y, irot);
+        if (eimg.rotates) {
+          const size = eimg.size || r * 2.5;
+          A(alpha);
+          this._spr(ctx, imageSprite(this.cache, 'enemy_' + e.type, eimg, size), x, y, theta);
+        } else {
+          // Shadow, body and modifier overlays baked into one sprite: one draw per meteor.
+          A(alpha);
+          this._spr(ctx, this._meteorImg(e.type, eimg, r, bits), x, y);
         }
       } else {
         // Aurora cycles hue frames (a rainbow gem needs no spin); the rest use rotation frames.
         const spr = e.type === 'aurora'
           ? this._meteorSprite(e.type, r, bits, Math.floor(t * 5 + h * 12) % 12, def.color)
           : this._meteorSprite(e.type, r, bits, mf, def.color);
-        A();
+        A(alpha);
         this._spr(ctx, spr, x, y);
       }
       // Multi-HP meteors: crack overlay + hit flash
@@ -1433,15 +1840,17 @@ export class Renderer {
       body = this.cache.get(bodyKey, R * 2.6, R * 2.6, (g) => (isTitan ? P.drawTitan(g, kind, R) : P.drawShip(g, kind, R, def.color)));
     }
     // Shadow: silhouette of the body, blurred, offset down-right in screen space.
-    const shadow = this.cache.get('shd|' + bodyKey + (img ? '|img' : ''), R * 2.6, R * 2.6, (g) => {
-      const k = g.getTransform().a;
-      try { g.filter = `blur(${(R * 0.05 * k).toFixed(1)}px)`; } catch { /* ignore */ }
-      drawSprite(g, body, 0, 0);
-      g.filter = 'none';
-      g.globalCompositeOperation = 'source-in';
-      g.fillStyle = 'rgba(0,0,0,0.42)';
-      g.fillRect(-R * 2, -R * 2, R * 4, R * 4);
-    });
+    const shadow = img
+      ? imageShadow(this.cache, imgKey, img, img.size || R * 2.3, null, 0.42, 0.05)
+      : this.cache.get('shd|' + bodyKey, R * 2.6, R * 2.6, (g) => {
+        const k = g.getTransform().a;
+        try { g.filter = `blur(${(R * 0.05 * k).toFixed(1)}px)`; } catch { /* ignore */ }
+        drawSprite(g, body, 0, 0);
+        g.filter = 'none';
+        g.globalCompositeOperation = 'source-in';
+        g.fillStyle = 'rgba(0,0,0,0.42)';
+        g.fillRect(-R * 2, -R * 2, R * 4, R * 4);
+      });
     const hover = isTitan ? 0.26 : 0.16;
     ctx.globalAlpha = alpha * (phantom ? 0.35 : 1);
     this._spr(ctx, shadow, x + R * hover * 0.6, y + R * hover, ang + rotOff);
@@ -1616,7 +2025,8 @@ export class Renderer {
       const spr = this.cache.get('drone|' + kind + '|' + col, 30, 30, (g) => P.drawDroneBody(g, 10, col, kind));
       const bob = Math.sin(t * 6 + idHash(d.id) * 10) * 1.5;
       this._spr(ctx, shadow, d.x + 8, d.y + 14, 0);
-      if (kind === 'tractor' && d.targetId != null && d.targetId >= 0) {
+      const run = owner && owner.t && owner.t.data && owner.t.data._field_run;
+      if (kind === 'tractor' && (d.towing === undefined ? d.targetId != null && d.targetId >= 0 : d.towing)) {
         const e = this._enemy(d.targetId);
         if (e) {
           this._world(ctx);
@@ -1629,6 +2039,15 @@ export class Renderer {
           ctx.globalAlpha = 1;
           ctx.globalCompositeOperation = 'source-over';
         }
+      }
+      if (run) {
+        // Bombing Run: the wing flies big and low, trailing smoke
+        if (Math.random() < this.simDt * 40 * this.particles.budget) {
+          const c = Math.cos(d.angle || 0), sn = Math.sin(d.angle || 0);
+          this.particles.smoke(d.x - c * 14, d.y - sn * 14, 7, 0.6, '#8b8f99', -c * 30, -sn * 30, 0.5);
+        }
+        this._spr(ctx, spr, d.x, d.y + bob, Number.isFinite(d.angle) ? d.angle : 0, 1.7);
+        continue;
       }
       this._spr(ctx, spr, d.x, d.y + bob, Number.isFinite(d.angle) ? d.angle : 0);
     }
@@ -1730,6 +2149,7 @@ export class Renderer {
       }
       let ang = (p.vx || p.vy) ? Math.atan2(p.vy, p.vx) : (p.angle || 0);
       if (vis === 'shard') ang = t * 18 + (idHash(p.id) * 6);
+      else if (vis === 'blade') ang = t * 14 + (idHash(p.id) * 6);
       this._spr(ctx, this._projFrame(S, frameOf(ang, PROJ_FRAMES), glows), x, y);
       if (vis === 'missile' && Math.random() < this.simDt * 30 * trailBudget) {
         const c = Math.cos(ang), sn = Math.sin(ang);
@@ -1752,6 +2172,7 @@ export class Renderer {
         let sc = 1;
         const h = idHash(p.id);
         if (vis === 'orb') { ang = t * 9 + h * 6; sc = 0.9 + 0.2 * Math.sin(t * 25 + h * 30); }
+        else if (vis === 'plasmaorb') { ang = t * 4 + h * 6; sc = 0.95 + 0.08 * Math.sin(t * 12 + h * 30); }
         else if (vis === 'flame') {
           const prog = this._progress(p);
           sc = 0.8 + prog * 1.1;
@@ -1822,15 +2243,16 @@ export class Renderer {
       ctx.beginPath();
       ctx.moveTo(pts[0], pts[1]);
       for (let i = 2; i < pts.length; i += 2) ctx.lineTo(pts[i], pts[i + 1]);
+      const zw = z.w || 1;
       ctx.globalAlpha = 0.3 * fr;
-      ctx.lineWidth = 9;
+      ctx.lineWidth = 9 * zw;
       ctx.strokeStyle = z.color;
       ctx.stroke();
       ctx.globalAlpha = 0.85 * fr;
-      ctx.lineWidth = 3.2;
+      ctx.lineWidth = 3.2 * zw;
       ctx.stroke();
       ctx.globalAlpha = fr;
-      ctx.lineWidth = 1.3;
+      ctx.lineWidth = 1.3 * Math.sqrt(zw);
       ctx.strokeStyle = '#ffffff';
       ctx.stroke();
     }
@@ -1896,13 +2318,15 @@ export class Renderer {
     ctx.stroke();
     if (def) {
       const hero = P.isHeroDef(def);
-      const imgKey = this._towerImageKey(def, 0, hero);
-      const img = imgKey ? this.assets.get(imgKey) : null;
-      ctx.globalAlpha = valid ? 0.85 : 0.5;
-      if (img) {
-        const s = imageSprite(this.cache, imgKey, img, img.size || r * 2.6);
-        this._spr(ctx, s, pl.x, pl.y, img.rotates ? -Math.PI / 2 + facingOffset(img.facing) : 0);
+      const art = this._towerArt(def, 0, hero);
+      if (art) {
+        const fr = def.radius || 22;
+        ctx.globalAlpha = valid ? 0.75 : 0.45;
+        this._spr(ctx, this._contactShadow(Math.round(fr)), pl.x + fr * 0.08, pl.y + fr * 0.2);
+        ctx.globalAlpha = valid ? 0.9 : 0.55;
+        this._spr(ctx, art.spr, pl.x, pl.y, art.rotates ? -Math.PI / 2 + art.rot0 : 0);
       } else {
+        ctx.globalAlpha = valid ? 0.85 : 0.5;
         const S = this._towerSprites(def, 0, 0, hero, r);
         this._spr(ctx, S.base, pl.x, pl.y);
         this._spr(ctx, S.head, pl.x, pl.y, P.headRotates(def) ? -Math.PI / 2 : 0);
@@ -1956,6 +2380,35 @@ function roundRectPath(ctx, x, y, w, h, r) {
   ctx.closePath();
 }
 
+// Diagonal red hatch tile for the no-build overlay (device px, not world units).
+function makeHatch() {
+  const S = 14;
+  const c = document.createElement('canvas');
+  c.width = S; c.height = S;
+  const g = c.getContext('2d');
+  g.strokeStyle = 'rgba(255,120,135,0.26)';
+  g.lineWidth = 3;
+  g.beginPath();
+  for (let i = -1; i <= 1; i++) { g.moveTo(i * S, S); g.lineTo(i * S + S, 0); }
+  g.stroke();
+  return c;
+}
+
+// Soft screen vignette on a small canvas; stretched to the view each frame.
+function makeVignette() {
+  const S = 128;
+  const c = document.createElement('canvas');
+  c.width = S; c.height = S;
+  const g = c.getContext('2d');
+  const vg = g.createRadialGradient(S / 2, S / 2, S * 0.36, S / 2, S / 2, S * 0.74);
+  vg.addColorStop(0, 'rgba(0,0,0,0)');
+  vg.addColorStop(0.6, 'rgba(0,0,0,0.14)');
+  vg.addColorStop(1, 'rgba(0,0,0,0.42)');
+  g.fillStyle = vg;
+  g.fillRect(0, 0, S, S);
+  return c;
+}
+
 function fmtCash(v) {
   const a = Math.abs(v);
   if (a >= 1e6) return (v / 1e6).toFixed(1) + 'M';
@@ -1985,6 +2438,62 @@ function drawImageIcon(ctx, spec, size, fill = 0.92) {
 }
 function assetGet(assets, key) {
   try { return assets && assets.get ? assets.get(key) : null; } catch { return null; }
+}
+
+// Map card preview: the real terrain, channel, blockers, Core and portals, rendered with the
+// same static-layer code as the game into `canvas` at cssW x cssH (world fit to cover).
+export function renderMapPreview(canvas, map, cssW, cssH, assets = null) {
+  if (!canvas || !map) return false;
+  const dpr = Math.min(2, Math.max(1, (typeof window !== 'undefined' && window.devicePixelRatio) || 1));
+  const W = Math.max(2, Math.round(cssW * dpr)), H = Math.max(2, Math.round(cssH * dpr));
+  canvas.width = W; canvas.height = H;
+  const k = Math.max(W / WORLD_W, H / WORLD_H);
+  const x0 = (WORLD_W - W / k) / 2, y0 = (WORLD_H - H / k) / 2;
+  const frame = { x0, y0, x1: x0 + W / k, y1: y0 + H / k, k, dpr };
+  const A = assets || EMPTY_ASSETS;
+  const lanes = buildLanes(null, map);
+  const portals = placePortals(lanes, frame, ((map.pathWidth || 56) * 0.9));
+  const s = buildStaticLayer({ map, lanes, frame, assets: A, portals });
+  const ctx = canvas.getContext('2d');
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  ctx.drawImage(s.canvas, 0, 0);
+  ctx.setTransform(k, 0, 0, k, -x0 * k, -y0 * k);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  const draw = (key, x, y, size, fallback) => {
+    const spec = A.get && A.get(key);
+    if (spec && spec.img) {
+      const img = spec.img;
+      const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
+      const f = size / Math.max(iw, ih);
+      ctx.drawImage(img, x - (iw * f) / 2, y - (ih * f) / 2, iw * f, ih * f);
+    } else fallback();
+  };
+  const pal = map.palette || {};
+  for (const p of portals) {
+    ctx.save();
+    ctx.translate(p.x, p.y);
+    ctx.globalCompositeOperation = 'lighter';
+    P.drawGlow(ctx, 90, pal.portal || '#b86bff', 0, 0.7);
+    ctx.restore();
+    draw('portal', p.x, p.y, (map.pathWidth || 56) * 1.9, () => {
+      ctx.save(); ctx.translate(p.x, p.y); P.drawPortalSwirl(ctx, (map.pathWidth || 56) * 0.78, pal.portal || '#b86bff', pal.edge || '#6ee7ff', 4); ctx.restore();
+    });
+  }
+  const c = map.core;
+  if (c) {
+    ctx.save();
+    ctx.translate(c.x, c.y);
+    ctx.globalCompositeOperation = 'lighter';
+    P.drawGlow(ctx, CORE_R * 2.2, pal.edge || '#6ee7ff', 0, 0.6);
+    ctx.restore();
+    draw('core', c.x, c.y, CORE_R * 2.4, () => {
+      ctx.save(); ctx.translate(c.x, c.y); P.drawCoreOrb(ctx, CORE_R, P.mix(pal.edge || '#6ee7ff', '#ffffff', 0.3), P.shade(pal.edge || '#6ee7ff', -0.45)); ctx.restore();
+    });
+  }
+  ctx.setTransform(1, 0, 0, 1, 0, 0);
+  s.canvas.width = 1; s.canvas.height = 1;
+  return true;
 }
 
 // variant: 0 base, 1..3 = path A/B/C tier 3+ look.
@@ -2018,9 +2527,30 @@ export function drawTowerIcon(ctx, towerDef, size, variant = 0, assets = null) {
   ctx.restore();
 }
 
+// Commander icon. Small icons (under 68 px) show a head-and-shoulders portrait cropped from
+// the figure art, which reads far better at tile size than a tiny full figure.
 export function drawHeroIcon(ctx, heroDef, size, assets = null) {
   if (!ctx || !heroDef) return;
   const def = P.isHeroDef(heroDef) ? heroDef : { ...heroDef, hero: true };
+  const spec = assetGet(assets, 'hero_' + def.id) || (def.art && def.art.sprite ? assetGet(assets, def.art.sprite) : null);
+  if (spec && spec.img && size < 68) {
+    const img = spec.img;
+    const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
+    if (iw && ih) {
+      const m = imageMeta(spec);
+      const [bx0, by0, bx1, by1] = m.box;
+      const side = Math.min(1, Math.max(bx1 - bx0, (by1 - by0) * 0.5));
+      const cx = (bx0 + bx1) / 2 * 0.4 + m.pivot.x * 0.6;
+      const sx = Math.max(0, Math.min(1 - side, cx - side / 2));
+      const sy = Math.max(0, by0 - side * 0.04);
+      ctx.save();
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(img, sx * iw, sy * ih, side * iw, side * ih, 0, 0, size, size);
+      ctx.restore();
+      return;
+    }
+  }
   drawTowerIcon(ctx, def, size, 0, assets);
 }
 

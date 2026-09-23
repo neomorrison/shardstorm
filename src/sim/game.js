@@ -643,7 +643,9 @@ export class Sim {
   // p: { x, y, angle | vx+vy, tower, speed, damage, pierce, dtype, lifetime, ... any projectile attack field }
   spawnProjectile(p) {
     const tower = p.tower ? (typeof p.tower === 'object' ? p.tower : this._towerById.get(p.tower)) : null;
-    const a = normAttack({ ...p, kind: 'projectile', tower: undefined }, { range: p.range ?? 300 }, p.attackKey || 'custom', tower, p.dtype || 'KINETIC');
+    const key = p.attackKey || p.key || 'custom';
+    const a = normAttack({ ...p, kind: 'projectile', tower: undefined }, { range: p.range ?? 300 }, key, tower, p.dtype || 'KINETIC');
+    a.key = key;
     const ang = p.angle ?? Math.atan2(p.vy || 0, p.vx || 1);
     const proj = launchProjectile(this, tower, a, p.x, p.y, ang, p.targetId ?? -1);
     return proj;

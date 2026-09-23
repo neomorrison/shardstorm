@@ -51,7 +51,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   sfx: 0.8,            // 0..1
   music: 0.5,          // 0..1
   autoStart: false,
-  particles: 'high',   // 'low' | 'high'
+  particles: 'high',   // 'low' | 'medium' | 'high'
   shake: true,
   floatText: true,
   showFps: false,
@@ -73,7 +73,7 @@ export function loadSettings() {
   }
   out.sfx = clamp01(out.sfx);
   out.music = clamp01(out.music);
-  if (out.particles !== 'low') out.particles = 'high';
+  if (out.particles !== 'low' && out.particles !== 'medium') out.particles = 'high';
   return out;
 }
 

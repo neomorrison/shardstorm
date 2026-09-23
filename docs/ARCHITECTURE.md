@@ -330,6 +330,11 @@ Debug hooks: `window.__ss = { get sim(), game, debug: { quickStart(mapId, diffic
 
 ## 12. Implementation notes (as built)
 
+### Tools
+- `tools/headless.mjs`: bots measure every tower configuration they consider in a small arena (the tools/bench.mjs arena, seven categories: SWARM, DENSE, SHIP, IRON, SPECIAL, PHANTOM, SPECTER), cache the profiles in `out/botprofiles.json` keyed by a hash of the data and engine sources, and buy against a per-lane, per-category demand built from the next waves. Flags: `--hero <id>`, `--abilities off`, `--help`.
+- `tools/bench.mjs` counts only enemies still in reach toward a scenario's population, measures mortar towers under their aim point, places utility towers across the channel from the reference Pulse (plain and Phantom streams) and spawns Beacon runs into the unbuffed window. It exports its arena helpers (`runAdaptiveMulti`, `newArenaSim`, `placeConfigured`, ...).
+- `tools/snap.mjs` steps: `{"waitFor": "expr"}` polls until an expression is truthy; an `eval` that contains `await` runs inside an async function.
+
 Additions and deviations the modules settled on while being built. They extend the contract above; nothing above was removed.
 
 ### Sim
@@ -341,17 +346,43 @@ Additions and deviations the modules settled on while being built. They extend t
 - Pulse-kind attacks hit up to 40 enemies when the tower file sets no `pierce`.
 - Tower data extras: aura `types` / `excludeTypes`; attack `onTick`, `shipPull`, `noLead` (no lead aiming), `scale` (visual size), hitscan `line` / `lineLength`, projectile `bounceRange`.
 
+### Engine additions in the content phase
+- Storm Titans resist slows: a slow (or a freeze turned into a ship slow) is half as strong on a Titan (`TITAN_SLOW_RESIST = 0.5` in `src/sim/enemies.js`; a 0.4 slow becomes 0.7), matching stuns, which already last half as long. An effect can give Titans an exact value with `slow.titanMult` / `freeze.titanMult` (Absolute Zero and Gravity Hauler do).
+- CRYO-immune meteors (Comet, Geode) are never slowed or frozen by CRYO effects, including on-hit effects passed down from a parent (`applyEffects` guard).
+- `findTarget(..., exclude)` accepts an array of ids or a number stamp (skip enemies whose `e._xs` equals it). Chain attacks stamp every enemy they hit, so exclusion is O(1) per check for long chains.
+- `sim.spawnProjectile(p)` sets the normalized attack's `key` from `p.attackKey` (or `p.key`), so custom projectiles report their `attackKey`.
+- Beacon and Commander `shipDamageAdd` buffs also raise `splash.shipDamage`.
+- A drone list restyles its drones (`visual`, `kind`, `color`) whenever the attack's look changes (upgrades), not only at creation; a tower's own custom attack may still restyle them afterwards.
+- The `vault` event's `amount` is what stayed in the vault (0 once it is full); the overflow is paid as a `cash` event.
+- Commander XP: `heroXpNeed(L) = HERO_XP_K x L^1.6` with `HERO_XP_K = 35` (was 150; see docs/ECONOMY.md 6).
+- Ability ids are unique across all towers and Commanders because `abilityBar()` groups by id (Brick's ability is `rocketbarrage`, the mortar's is `barrage`).
+- Conventions tower files rely on: per-wave scratch lives in `tower.data` keys starting with `_field_` or `_beam_` (deleted when the build phase starts, so saves never hold it); the engine keeps a drone attack's drones in `tower.data['_drones_' + key]`; custom code may put dynamic fields on enemies (Gravity Well `gRew`, Drone Bay `_towed`, chain stamp `_xs`), which never outlive a wave. The built-in field `pull` is unbounded; custom pulls use a per-enemy budget so waves always end.
+
+### Engine behaviours tower authors should know
+- A beam's `shipDamage` is added on every damage tick (every `tickRate`, 0.1 s by default), so `shipDamage: 1` is +10 per second against ships.
+- `strong` targeting picks the highest remaining mass (Titans, then ships first), so it keeps switching to fresh big meteors; low per-hit damage may never finish one.
+- A `line` hitscan hits the first `pierce` enemies counted from the tower, so a crowded line can use up the pierce before the intended target.
+
 ### Events beyond section 4
 `crit`, `regrow`, `pulse` (area pulse ring), `titanSpit`, `titanBlink`, `shieldBreak`, `shieldUp`, `heroLevel`, `abilityFx`, `vault`. `shot` also carries `x2, y2` (hitscan tracer end) and `drone`. `waveStart` carries `titan` (kind or null), `name`, `tip` and `theme`; `titan` carries `kind`.
 
 ### Renderer
 - Extra state it reads: `enemy.off` (lateral offset from the channel centre), `enemy.bornT`, `enemy.titan`; mortar shells `mortar, prog (0..1), x0, y0, tx, ty, arc`; beam entries `ramp, dtype, targetId`; drones `idx, key, color`.
-- API beyond section 8: `setSettings({ particles, shake, floatText, reducedMotion })`, `setDefs({ towers, heroes })`, `setInsets({ top, right, bottom, left })` (the HUD and drawer are grid rows beside the canvas, not overlays, so main.js leaves insets at zero), `setAssets`, `stats` (`{ enemies, projectiles, particles, drawMs, governor }`).
+- API beyond section 8: `setSettings({ particles: 'low' | 'medium' | 'high', shake, floatText, reducedMotion })`, `setDefs({ towers, heroes })`, `setInsets({ top, right, bottom, left })` (the HUD and drawer are grid rows beside the canvas, not overlays; main.js sets insets from the ability bar so the world shifts into free letterbox space instead of sitting under the buttons, never shrinking), `setAssets`, `stats` (`{ enemies, projectiles, particles, drawMs, governor }`).
+- View control: `zoomAt(factor, px, py)`, `setZoom(z, px, py)`, `panBy(dx, dy)`, `resetView()`, getters `zoom` and `maxZoom` (4x). Zoom and pan are clamped to the world; pinch, one-finger pan, wheel, drag, middle/Alt drag and `+`/`-`/`0` keys drive them. `renderMapPreview(canvas, map, cssW, cssH, assets)` (module export) draws a map card preview. `buildStaticLayer` (render/channel.js) takes `{ frame: { x0, y0, x1, y1, k, dpr } }`.
+- Projectile visuals added in the content phase: `blade` (a spinning crescent, Scatter Pod Blade Ring) and `plasmaorb` (a tinted additive orb, Plasma Tempest; the plain `orb` core washes out white). `resolveVisual` maps names by keyword (`blade|crescent|sickle` and `plasma orb|tempest` first).
+- `pulse` events are drawn by their `visual` hint: `fire` (burning ground glow and embers, one glow per spot), `implode` (contracting ring), `surge` (inward teal wave), `blackhole`, `radar` (thin cyan ping), `refinery` (small gold ring); anything else is the default ring. `explode` with `visual: 'blackhole'` draws a violet collapse instead of a fireball. Repeated explosions on one spot within 0.25 s draw only a ring and sparks, so a rapid mortar does not stack into a white blob.
+- `abilityFx` events are coloured per ability id (a trailing level digit is ignored); `blackhole` also starts a 3 s persistent ground effect (dark core with a spinning accretion ring).
+- `zap` events may carry `width` (a stroke multiplier); without it the zap `visual` picks one (`arcweb` 1.1, `stormcrown` 1.55, `overload` 1.35, `zeus` 2.4, which also lingers longer). The engine's chain attacks pass `atk.zapWidth` when a tower sets it.
+- Drones: a tractor beam is drawn only while the drone's `towing` flag is true (the Drone Bay sets it each tick; drones without the flag fall back to "has a target"). While the owning tower has `data._field_run` (Strike Wing's Bombing Run) its drones draw 1.7x larger with a smoke trail.
+- Field rings: a tower with `attacks.tide` (Gravity Well Undertow) runs its rings outward and faster.
+- The vault floating text sits above the rig's own payout text.
 - Icon helpers: `drawTowerIcon(ctx, def, size, variant, assets)`, `drawHeroIcon`, `drawEnemyIcon(ctx, type, size, mods, assets)`, `drawTitanIcon(ctx, kind, size, assets)`.
 - Tower art: `art.sprite` is tried first, then `tower_<id>`, then an alias (`rail` also looks for `tower_sniper_<n>`). `art.shape`: hex, square, circle, oct, diamond, tri, pent. Optional `art.head` picks the head style. Projectile visuals: bolt, shard, slug, missile, shell, orb, needle, plasma, flame, cryo, bomb, lance (other names map by keyword).
 - The placement ghost ring uses `def.base.range` (no Beacon buffs).
 
 ### Client
-- Titan death plays 0.9 s of slow motion (0.3x easing back to 1x) from the game loop; the renderer adds the flash and shake.
+- Titan death plays slow motion from the game loop: 0.3x held for 0.6 s, then eased back to 1x over 0.25 s; the renderer adds the flash and shake.
+- UI: ability buttons show the owner's portrait plus a small badge. Tower abilities name an `icon` id and get the matching `ab_<id>` SVG from `src/ui/format.js` (`hasIcon(name)` tells whether one exists); Commander abilities use a one or two character glyph. The tower panel hides the targeting row when no attack picks targets (every attack `needsTarget: false`, such as Rigs and Beacons) and hides the arrows when there is a single mode (the mortar's `manual`); damage-free fields (the base Gravity Well) show no damage type. The Codex and shop tooltip show `Aura` for towers with `base.aura` and `Global` for infinite range. A Commander level-up toast carries that level's note (shortened to its headline when long), and the Commander panel shows the next level's note.
 - A run that used `__ss.debug.skipTo` is flagged `debug` (kept in the save meta) and never writes records.
 - `window.__ss.debug` also has `select(id)`, `pause()`, `resume()`, `speed(n)`, `screen(name)`.

@@ -14,7 +14,12 @@ const params = new URLSearchParams(location.search);
 const DEBUG = params.get('debug') === '1';
 const MAX_STEPS = 12;
 const SPEEDS = [1, 2, 3];
-const SLOWMO_TIME = 0.9;   // seconds of real time the Titan-death slow motion lasts
+// Titan death: a short slow-motion beat. Holds 0.3x for SLOWMO_HOLD s of real time, then eases
+// back to full speed over SLOWMO_EASE s.
+const SLOWMO_HOLD = 0.6;
+const SLOWMO_EASE = 0.25;
+const SLOWMO_TIME = SLOWMO_HOLD + SLOWMO_EASE;
+const SLOWMO_RATE = 0.3;
 
 function okOf(r) {
   if (r == null) return false;
@@ -240,6 +245,7 @@ class Game {
     const drawEnemyIcon = pick('drawEnemyIcon');
     const drawHeroIcon = pick('drawHeroIcon');
     const drawTitanIcon = pick('drawTitanIcon');
+    this.renderMapPreview = renderMod?.renderMapPreview || null;
     const A = this.assets;
     this.icons = {
       tower: (c, def, size, variant = 0) => paint(c, size,
@@ -337,6 +343,9 @@ class Game {
       [['P', 'Esc'], 'Pause'],
       [['1', '9'], 'Abilities'],
       [['Hold Shift'], 'Show every tower range'],
+      [this.isTouch ? ['Pinch', 'Drag'] : ['Wheel', '+', '-'], this.isTouch ? 'Zoom and pan the map' : 'Zoom the map'],
+      [['Drag'], 'Pan a zoomed map (or middle drag)'],
+      [['0'], 'Fit the whole map'],
     );
     return rows;
   }
@@ -375,8 +384,17 @@ class Game {
       const short = this.layout === 'compact' && window.innerWidth > window.innerHeight && window.innerHeight < 560;
       this.app.classList.toggle('is-short', short);
       this.ui?._hideTip();
+      this._queueInsets();
     };
     apply();
+    // The ability bar and the stage change size independently of the window.
+    if (typeof ResizeObserver !== 'undefined') {
+      try {
+        const ro = new ResizeObserver(() => this._queueInsets());
+        ro.observe(this.canvas);
+        if (this.ui?.$abilities) ro.observe(this.ui.$abilities);
+      } catch { /* ignore */ }
+    }
     try { q.addEventListener('change', apply); } catch { /* old browsers */ }
     window.addEventListener('resize', apply);
     const rm = media('(prefers-reduced-motion: reduce)');
@@ -474,6 +492,47 @@ class Game {
     return { x: (w - 1500 * s) / 2 + x * s, y: (h - 1000 * s) / 2 + y * s };
   }
 
+  /** Back to the whole-map view. */
+  resetView() {
+    if (this.renderer?.resetView?.()) this.onViewChange();
+  }
+
+  /** Called after any zoom or pan (input.js). */
+  onViewChange() {
+    this.ui?._hideTip();
+  }
+
+  _queueInsets() {
+    if (this._insetsQueued) return;
+    this._insetsQueued = true;
+    requestAnimationFrame(() => { this._insetsQueued = false; this._updateInsets(); });
+  }
+
+  /**
+   * Keep the world clear of overlays that sit on the canvas for good (the ability bar). The
+   * world only shifts into free letterbox space, it never shrinks, so the map keeps its size;
+   * when zoomed in, the same insets let the player pan the world edge out from under the bar.
+   */
+  _updateInsets() {
+    const r = this.renderer;
+    if (!r?.setInsets) return;
+    const ins = { top: 0, right: 0, bottom: 0, left: 0 };
+    const bar = this.inGame ? this.ui?.$abilities : null;
+    if (bar && bar.childElementCount && bar.offsetParent !== null) {
+      const st = this.canvas.getBoundingClientRect();
+      const br = bar.getBoundingClientRect();
+      if (st.width > 0 && st.height > 0 && br.width > 0) {
+        const fit = Math.min(st.width / 1500, st.height / 1000);
+        const freeV = st.height - 1000 * fit, freeH = st.width - 1500 * fit;
+        const coverB = Math.max(0, st.bottom - br.top + 6);
+        const coverR = Math.max(0, st.right - br.left + 6);
+        if (freeV >= freeH) ins.bottom = Math.floor(Math.min(coverB, freeV));
+        else ins.right = Math.floor(Math.min(coverR, freeH));
+      }
+    }
+    r.setInsets(ins);
+  }
+
   /** CSS px per world unit. */
   worldScale() {
     const a = this.worldToScreen(0, 0), b = this.worldToScreen(100, 0);
@@ -562,6 +621,7 @@ class Game {
     this.screens.closeAll();
     try { this.renderer?.setMap(sim); } catch (err) { console.error('[shardstorm] setMap failed', err); }
     this.ui.bind(sim);
+    this._queueInsets();
     this.unlockAudio();
     try { this.audio.startMusic(); this.audio.setIntensity(0.1); } catch { /* ignore */ }
     this._last = performance.now();
@@ -741,7 +801,8 @@ class Game {
       let slow = 1;
       if (this.slowMo > 0) {
         this.slowMo = Math.max(0, this.slowMo - dt);
-        slow = this.reducedMotion ? 1 : 0.3 + 0.7 * (1 - this.slowMo / SLOWMO_TIME) ** 2;
+        const e = this.slowMo > SLOWMO_EASE ? 0 : 1 - this.slowMo / SLOWMO_EASE;
+        slow = this.reducedMotion ? 1 : SLOWMO_RATE + (1 - SLOWMO_RATE) * e * e * (3 - 2 * e);
       }
       this.acc += Math.min(dt, 0.1) * this.speed * slow;
       while (this.acc >= TICK && steps < MAX_STEPS) {

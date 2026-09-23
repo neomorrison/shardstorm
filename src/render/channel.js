@@ -212,19 +212,110 @@ const filterOK = (() => {
   } catch { return false; }
 })();
 
-// Build the static layer. Returns { canvas, k, ox, oy, m }.
-export function buildStaticLayer({ map, lanes, camera, assets, portals }) {
-  const m = Math.round(24 * camera.dpr);
-  const W = camera.w + m * 2, H = camera.h + m * 2;
+/// ---------------------------------------------------------------------------
+// Map art grading
+// ---------------------------------------------------------------------------
+// The painted terrain varies a lot in brightness (Frostline is nearly white), while the
+// channel, towers and meteors are tuned for mid-dark ground. Each map gets a multiply tint
+// for its mood, then a darkening pass that brings the average luminance to `lum`, so every
+// map sits in the same value range and the channel and pieces pop.
+const GRADE = {
+  crater: { tint: '#dfe6f2', lum: 0.3 },
+  frost:  { tint: '#8fb0cf', lum: 0.31 },
+  dock:   { tint: '#a9bcc6', lum: 0.28 },
+  ember:  { tint: '#f0dcd6', lum: 0.24 },
+  prism:  { tint: '#ece4ff', lum: 0.22 },
+};
+const DEFAULT_GRADE = { tint: '#e6ebf5', lum: 0.28 };
+
+// Small readable copy of an image for color sampling (cached on the spec).
+const SAMPLE_W = 150;
+export function imageSample(spec) {
+  if (!spec || !spec.img) return null;
+  if (spec._sample !== undefined) return spec._sample;
+  let out = null;
+  try {
+    const img = spec.img;
+    const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
+    const w = SAMPLE_W, h = Math.max(2, Math.round((SAMPLE_W * ih) / iw));
+    const c = makeCanvas(w, h);
+    const g = c.getContext('2d', { willReadFrequently: true });
+    g.drawImage(img, 0, 0, w, h);
+    const d = g.getImageData(0, 0, w, h).data;
+    let L = 0;
+    for (let i = 0; i < d.length; i += 4) L += (0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2]) / 255;
+    out = { w, h, d, lum: L / (w * h) };
+  } catch { out = null; }
+  spec._sample = out;
+  return out;
+}
+
+// Average color of the (ungraded) map art in a world-space disc, as [r, g, b].
+function sampleDisc(S, x, y, r) {
+  if (!S) return null;
+  const sx = S.w / WORLD_W, sy = S.h / WORLD_H;
+  let R = 0, G = 0, B = 0, n = 0;
+  const x0 = Math.max(0, Math.floor((x - r) * sx)), x1 = Math.min(S.w - 1, Math.ceil((x + r) * sx));
+  const y0 = Math.max(0, Math.floor((y - r) * sy)), y1 = Math.min(S.h - 1, Math.ceil((y + r) * sy));
+  for (let j = y0; j <= y1; j++) {
+    for (let i = x0; i <= x1; i++) {
+      const dx = (i + 0.5) / sx - x, dy = (j + 0.5) / sy - y;
+      if (dx * dx + dy * dy > r * r) continue;
+      const p = (j * S.w + i) * 4;
+      R += S.d[p]; G += S.d[p + 1]; B += S.d[p + 2]; n++;
+    }
+  }
+  return n ? [R / n, G / n, B / n] : null;
+}
+
+function gradeOf(map, S) {
+  const G = (map && GRADE[map.id]) || DEFAULT_GRADE;
+  const t = parseColor(G.tint);
+  const tl = (0.2126 * t[0] + 0.7152 * t[1] + 0.0722 * t[2]) / 255;
+  const lum0 = S ? S.lum * tl : 0.3;
+  const dark = Math.max(0, Math.min(0.72, 1 - G.lum / Math.max(0.01, lum0)));
+  return { tint: G.tint, t, dark };
+}
+// A sampled art color after grading, as a hex string.
+function graded(rgb, gr) {
+  const f = 1 - gr.dark;
+  const c = [0, 1, 2].map((i) => Math.round(((rgb[i] * gr.t[i]) / 255) * f));
+  return '#' + c.map((v) => Math.max(0, Math.min(255, v)).toString(16).padStart(2, '0')).join('');
+}
+
+// Draw the map art anchored to the world rectangle (it is 3:2 like the world), mirrored
+// beyond the world edges so letterbox areas continue the terrain without a seam.
+function drawMapArt(ctx, img, view) {
+  const x0 = Math.floor(view.x0 / WORLD_W), x1 = Math.floor((view.x1 - 1e-6) / WORLD_W);
+  const y0 = Math.floor(view.y0 / WORLD_H), y1 = Math.floor((view.y1 - 1e-6) / WORLD_H);
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = 'high';
+  for (let j = y0; j <= y1; j++) {
+    for (let i = x0; i <= x1; i++) {
+      const fx = i & 1 ? -1 : 1, fy = j & 1 ? -1 : 1;
+      ctx.save();
+      ctx.translate(i * WORLD_W + (fx < 0 ? WORLD_W : 0), j * WORLD_H + (fy < 0 ? WORLD_H : 0));
+      ctx.scale(fx, fy);
+      // Overdraw by a hair so tile seams never show a background line.
+      ctx.drawImage(img, -0.5, -0.5, WORLD_W + 1, WORLD_H + 1);
+      ctx.restore();
+    }
+  }
+}
+
+// Build the static layer for a world-space frame { x0, y0, x1, y1, k, dpr }: the layer covers
+// that rectangle at k device px per world unit. Returns { canvas, k, ox, oy, rect } where a
+// world point maps to layer pixel (ox + x * k, oy + y * k).
+export function buildStaticLayer({ map, lanes, frame, assets, portals }) {
+  const k = frame.k;
+  const W = Math.max(2, Math.ceil((frame.x1 - frame.x0) * k));
+  const H = Math.max(2, Math.ceil((frame.y1 - frame.y0) * k));
   const canvas = makeCanvas(W, H);
   const ctx = canvas.getContext('2d');
-  const k = camera.k;
-  const ox = camera.ox + m, oy = camera.oy + m;
+  const ox = -frame.x0 * k, oy = -frame.y0 * k;
   const pal = { ...DEFAULT_PALETTE, ...((map && map.palette) || {}) };
   const seed = hashStr((map && map.id) || 'map');
-  const view = {
-    x0: (0 - ox) / k, y0: (0 - oy) / k, x1: (W - ox) / k, y1: (H - oy) / k,
-  };
+  const view = { x0: frame.x0, y0: frame.y0, x1: frame.x1, y1: frame.y1 };
   const world = () => ctx.setTransform(k, 0, 0, k, ox, oy);
   const screen = () => ctx.setTransform(1, 0, 0, 1, 0, 0);
   const pathW = (map && map.pathWidth) || 56;
@@ -234,20 +325,32 @@ export function buildStaticLayer({ map, lanes, camera, assets, portals }) {
 
   // --- Ground -------------------------------------------------------------
   const bgSpec = assets && map && assets.get && assets.get('map_' + map.id);
+  const S = bgSpec && bgSpec.img ? imageSample(bgSpec) : null;
+  const gr = bgSpec && bgSpec.img ? gradeOf(map, S) : null;
   screen();
   ctx.fillStyle = pal.ground2;
   ctx.fillRect(0, 0, W, H);
   if (bgSpec && bgSpec.img) {
-    const img = bgSpec.img;
-    const iw = img.naturalWidth || img.width, ih = img.naturalHeight || img.height;
-    // Cover the whole canvas, centered on the world center.
-    const s = Math.max(W / iw, H / ih);
-    const cx = ox + (WORLD_W / 2) * k, cy = oy + (WORLD_H / 2) * k;
-    let dx = cx - (iw * s) / 2, dy = cy - (ih * s) / 2;
-    dx = Math.min(0, Math.max(W - iw * s, dx));
-    dy = Math.min(0, Math.max(H - ih * s, dy));
-    ctx.imageSmoothingQuality = 'high';
-    ctx.drawImage(img, dx, dy, iw * s, ih * s);
+    world();
+    drawMapArt(ctx, bgSpec.img, view);
+    screen();
+    ctx.globalCompositeOperation = 'multiply';
+    ctx.fillStyle = gr.tint;
+    ctx.fillRect(0, 0, W, H);
+    ctx.globalCompositeOperation = 'source-over';
+    if (gr.dark > 0) {
+      ctx.fillStyle = `rgba(6,8,16,${gr.dark.toFixed(3)})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+    // Ambient occlusion along the channel: the ground darkens toward the cut, which also
+    // separates the path from busy terrain art.
+    world();
+    if (filterOK) {
+      ctx.save();
+      ctx.filter = `blur(${(22 * k).toFixed(1)}px)`;
+      strokeLanes(ctx, lanes, pathW + 70, 'rgba(4,6,12,0.34)');
+      ctx.restore();
+    }
   } else {
     paintTerrain(ctx, { view, k, ox, oy, W, H, pal, seed, coarse, pathW, blockers, core, world, screen, flavor: terrainFlavor(map) });
   }
@@ -255,7 +358,7 @@ export function buildStaticLayer({ map, lanes, camera, assets, portals }) {
   // Darken outside the playable world rectangle (soft edge).
   world();
   const fade = 60;
-  const dark = 'rgba(4,6,12,0.30)';
+  const dark = 'rgba(4,6,12,0.42)';
   const clear = 'rgba(4,6,12,0)';
   const band = (x0, y0, x1, y1, gx0, gy0, gx1, gy1) => {
     const g = ctx.createLinearGradient(gx0, gy0, gx1, gy1);
@@ -289,13 +392,22 @@ export function buildStaticLayer({ map, lanes, camera, assets, portals }) {
   for (const b of [...blockers, ...props]) {
     if (!b || !Number.isFinite(b.x)) continue;
     const spec = assets && assets.get && assets.get('blocker_' + (b.kind || 'rock'));
+    // Blockers on painted terrain take their colors from the art under them.
+    let bp = pal;
+    if (S) {
+      const rgb = sampleDisc(S, b.x, b.y, (b.r || 40) * 1.6);
+      if (rgb) {
+        const g0 = graded(rgb, gr);
+        bp = { ...pal, ground: shade(g0, 0.1), ground2: shade(g0, -0.25), art: true };
+      }
+    }
     ctx.save();
     ctx.translate(b.x, b.y);
     if (spec && spec.img) {
       const s = (b.r || 40) * 2.3;
       ctx.drawImage(spec.img, -s / 2, -s / 2, s, s);
     } else {
-      drawBlocker(ctx, b, pal, seed);
+      drawBlocker(ctx, b, bp, seed);
     }
     ctx.restore();
   }
@@ -306,15 +418,7 @@ export function buildStaticLayer({ map, lanes, camera, assets, portals }) {
   drawCorePlatform(ctx, CORE_R, pal);
   ctx.restore();
 
-  // --- Screen vignette -------------------------------------------------------
-  screen();
-  const vg = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.45, W / 2, H / 2, Math.hypot(W, H) * 0.62);
-  vg.addColorStop(0, 'rgba(0,0,0,0)');
-  vg.addColorStop(1, 'rgba(0,0,0,0.38)');
-  ctx.fillStyle = vg;
-  ctx.fillRect(0, 0, W, H);
-
-  return { canvas, k, ox, oy, m };
+  return { canvas, k, ox, oy, rect: view };
 }
 
 export const CORE_R = 46;
@@ -711,9 +815,10 @@ function paintChannel(ctx, o) {
   }
   // Raised berm of displaced soil around the cut
   strokeLanes(ctx, lanes, Wd + 20, rgba(shade(pal.ground, 0.1), 0.55));
-  // Glowing rim
-  strokeLanes(ctx, lanes, Wd + 8, INK);
-  strokeLanes(ctx, lanes, Wd + 5, edge);
+  // Glowing rim (never thinner than about 1.2 device px, so small previews keep it)
+  const rim = Math.max(3.5, 1.2 / k);
+  strokeLanes(ctx, lanes, Wd + 1.5 + rim + 3, INK);
+  strokeLanes(ctx, lanes, Wd + 1.5 + rim, edge);
   strokeLanes(ctx, lanes, Wd + 1.5, INK);
   // Trench walls and floor
   const wall = mix(pal.channel, pal.ground2, 0.45);

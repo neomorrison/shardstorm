@@ -91,7 +91,10 @@ function buffAttack(a, b) {
     if (a.splash) a.splash.damage = (a.splash.damage ?? 1) + b.damageAdd;
     if (a.dps) a.dps *= 1 + 0.2 * b.damageAdd;
   }
-  if (b.shipDamageAdd) a.shipDamage = (a.shipDamage || 0) + b.shipDamageAdd;
+  if (b.shipDamageAdd) {
+    a.shipDamage = (a.shipDamage || 0) + b.shipDamageAdd;
+    if (a.splash) a.splash.shipDamage = (a.splash.shipDamage || 0) + b.shipDamageAdd;
+  }
   if (b.bypass.length) {
     const cur = a.bypass || [];
     for (const x of b.bypass) if (cur.indexOf(x) < 0) cur.push(x);
@@ -351,7 +354,9 @@ function onScreen(e) {
   return e.x > -e.radius * 0.5 && e.x < 1500 + e.radius * 0.5 && e.y > -e.radius * 0.5 && e.y < 1000 + e.radius * 0.5;
 }
 
-// Target selection. Respects detection, immunity-aware skipping and an optional id exclusion list.
+// Target selection. Respects detection, immunity-aware skipping and an optional exclusion:
+// an array of enemy ids, or a number stamp (skip enemies whose e._xs equals it; O(1) per check,
+// used by long chains).
 export function findTarget(sim, tower, range, mode, atk, ox, oy, exclude) {
   if (ox === undefined) { ox = tower.x; oy = tower.y; }
   const detect = tower.stats.detection || !!(atk && atk.detection);
@@ -365,7 +370,7 @@ export function findTarget(sim, tower, range, mode, atk, ox, oy, exclude) {
     if (e.dead) continue;
     if (e.phantom && !detect && e.exposedT <= 0) continue;
     if (dtype !== null && !canDamage(e, dtype, bypass)) continue;
-    if (exclude && exclude.indexOf(e.id) >= 0) continue;
+    if (exclude != null && (typeof exclude === 'number' ? e._xs === exclude : exclude.indexOf(e.id) >= 0)) continue;
     if (!onScreen(e)) continue;
     let score;
     switch (mode) {

@@ -134,8 +134,25 @@ const P = {
   map: '<path d="M3.5 6.5l5.5-2 6 2 5.5-2v13l-5.5 2-6-2-5.5 2z"/><path d="M9 4.5v13M15 6.5v13"/>',
   bolt: '<path d="M13 2.5L5 13.5h6l-1 8 8-11h-6z" fill="currentColor" stroke="none"/>',
   info: '<circle cx="12" cy="12" r="8.5"/><path d="M12 11v5.5"/><circle cx="12" cy="7.8" r="1.1" fill="currentColor" stroke="none"/>',
+  fit: '<path d="M4 9V5.5A1.5 1.5 0 0 1 5.5 4H9M15 4h3.5A1.5 1.5 0 0 1 20 5.5V9M20 15v3.5a1.5 1.5 0 0 1-1.5 1.5H15M9 20H5.5A1.5 1.5 0 0 1 4 18.5V15"/><rect x="8.5" y="8.5" width="7" height="7" rx="1.2"/>',
   sound: '<path d="M4 9.5h3.5L12 5.5v13l-4.5-4H4z"/><path d="M15.5 9a4 4 0 0 1 0 6M18 6.5a7.5 7.5 0 0 1 0 11"/>',
 };
+
+// Ability badges (ability `icon` ids from the tower files).
+Object.assign(P, {
+  ab_hurricane: '<path d="M12 12a2 2 0 1 1 2-2 4 4 0 1 1-4-4 6.5 6.5 0 1 1-6.5 6.5"/>',
+  ab_maelstrom: '<path d="M12 4a8 8 0 0 1 7.5 6M19.5 14a8 8 0 0 1-7.5 6.5M5.5 17.5A8 8 0 0 1 4.5 9"/><circle cx="12" cy="12" r="2.2" fill="currentColor"/>',
+  ab_carpet: '<circle cx="7.5" cy="15" r="3.5"/><circle cx="16.5" cy="13" r="3.5"/><path d="M9.5 12l1.5-3.5M18.5 10l1.5-3.5"/>',
+  ab_absolutezero: '<path d="M12 3v18M4.2 7.5l15.6 9M4.2 16.5l15.6-9M9.5 4.5 12 7l2.5-2.5M9.5 19.5 12 17l2.5 2.5"/>',
+  ab_zeus: '<path d="M13.5 2.5L5.5 13.5h6l-1.5 8 8.5-11.5h-6z"/>',
+  ab_bombingrun: '<path d="M3.5 8.5h13l3.5-3M3.5 8.5l3 3h10"/><circle cx="8.5" cy="17" r="2"/><circle cx="15" cy="19" r="2"/>',
+  ab_blackhole: '<circle cx="12" cy="12" r="3.4" fill="currentColor"/><ellipse cx="12" cy="12" rx="9.5" ry="4.8" transform="rotate(-24 12 12)"/>',
+  ab_barrage: '<circle cx="12" cy="12" r="6"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/><circle cx="12" cy="12" r="1.6" fill="currentColor"/>',
+  ab_warcouncil: '<path d="M6 21V4"/><path d="M6 4.5h11.5l-2.5 4 2.5 4H6"/>',
+});
+
+/** Is there an inline SVG icon with this name? */
+export function hasIcon(name) { return Object.prototype.hasOwnProperty.call(P, name); }
 
 /** Inline SVG icon (24 unit box, stroked with currentColor). */
 export function icon(name, cls = '') {

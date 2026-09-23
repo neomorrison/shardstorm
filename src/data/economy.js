@@ -60,7 +60,10 @@ export function titanHp(tier) {
 
 // Commander XP
 export function heroXpForWave(w) { return 40 + 12 * w; }
-export function heroXpNeed(level) { return 150 * Math.pow(level, 1.6); }
+// Tuned so a Commander placed on wave 1 reaches level 10 near wave 25 and level 20 near wave 60
+// (measured with the real XP sources: 0.1 XP per shell its team destroys plus 40 + 12w per wave).
+export const HERO_XP_K = 35;
+export function heroXpNeed(level) { return HERO_XP_K * Math.pow(level, 1.6); }
 export const HERO_MAX_LEVEL = 20;
 
 // Difficulty

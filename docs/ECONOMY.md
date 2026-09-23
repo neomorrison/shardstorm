@@ -166,7 +166,7 @@ Authored waves 1 to 15 are stretched in time without changing their mass: every 
 A leaked enemy removes its **remaining mass** from Core Integrity: remaining shell HP plus the full mass of its children (with the wave's H applied to ship hulls). A leaked Storm Titan ends the run.
 
 ## 6. Commanders
-Commander XP per wave cleared: `xp(w) = 40 + 12w`. XP to go from level L to L+1: `xpNeed(L) = 150 x L^1.6`. Level 20 is reached around wave 55 if placed on wave 1. Commander price follows the difficulty multiplier; selling returns 70%.
+Commander XP per wave cleared: `xp(w) = 40 + 12w`, plus 0.1 XP for every shell the team destroys while the Commander is on the field. XP to go from level L to L+1: `xpNeed(L) = 35 x L^1.6`. Placed on wave 1, a Commander reaches level 10 around wave 25 and level 20 around wave 60. Commander price follows the difficulty multiplier; selling returns 70%.
 
 ## 7. Soundness claims and how they are checked
 
