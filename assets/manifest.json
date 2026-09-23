@@ -32,8 +32,8 @@
   },
   "map_prism": {
    "src": "img/maps/prism.jpg",
-   "w": 1248,
-   "h": 832
+   "w": 1264,
+   "h": 848
   },
   "tower_pulse_0": {
    "src": "img/towers/tower_pulse_0.png",
