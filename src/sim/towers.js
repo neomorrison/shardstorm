@@ -101,10 +101,14 @@ function buffAttack(a, b) {
     if (a.splash) a.splash.shipDamage = (a.splash.shipDamage || 0) + b.shipDamageAdd;
   }
   if (b.bypass.length) {
+    // A splash without a bypass of its own uses its attack's (normAttack), so it starts from a
+    // copy of the attack's own bypass here; the aura's bypass then adds to both. Seeding it with
+    // the aura's alone would drop the attack's own bypass from its splash inside the aura.
+    const own = a.bypass ? a.bypass.slice() : [];
     const cur = a.bypass || [];
     for (const x of b.bypass) if (cur.indexOf(x) < 0) cur.push(x);
     a.bypass = cur;
-    if (a.splash) { const sb = a.splash.bypass || []; for (const x of b.bypass) if (sb.indexOf(x) < 0) sb.push(x); a.splash.bypass = sb; }
+    if (a.splash) { const sb = a.splash.bypass || own; for (const x of b.bypass) if (sb.indexOf(x) < 0) sb.push(x); a.splash.bypass = sb; }
   }
   if (a.split && a.split.attack) buffAttack(a.split.attack, { ...b, rangeMult: 1, rateMult: 1 });
   if (a.shrapnel) buffAttack(a.shrapnel, { ...b, rangeMult: 1, rateMult: 1 });

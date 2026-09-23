@@ -17,7 +17,7 @@ Currency: **credits** (shown as a number with a small crystal glyph, e.g. `◆ 6
 1. Build phase: place towers, upgrade, sell. Press **Launch Wave** (or auto-start).
 2. Wave phase: meteors spawn at the channel mouth and follow the path to the Core. Towers fire automatically. Each shell destroyed pays credits. Any meteor that reaches the Core deals its remaining **mass** as damage to Core Integrity.
 3. Wave cleared: wave bonus paid, Mining Rigs pay out, next wave. The run autosaves whenever the field is clear again (see section 10).
-4. You can place, upgrade and sell during waves too. You can **send the next wave early** once the current wave has finished spawning (Bloons-style), which overlaps waves. Auto-start (a setting and a HUD toggle) launches the next wave shortly after one is cleared; it never launches the first wave of a run on its own.
+4. You can place, upgrade and sell during waves too. You can **send the next wave early** once the current wave has finished spawning (Bloons-style), which overlaps waves. Auto-start (a setting and a HUD toggle) launches the next wave shortly after one is cleared; it never launches the first wave of a run on its own, and turning it on while a build phase is waiting for the player takes effect from the next clear, so the toggle never launches the wave being built for.
 
 Game over when Core Integrity hits 0. The run's score is the highest wave fully cleared. Records are kept per map and difficulty.
 

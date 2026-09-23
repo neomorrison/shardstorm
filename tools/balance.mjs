@@ -37,7 +37,7 @@ import { TOWERS, TOWER_LIST, NO_DISCOUNT } from '../src/data/towers/index.js';
 import { HEROES } from '../src/data/heroes.js';
 import { MAPS, MAP_ORDER } from '../src/data/maps.js';
 import { ENEMIES } from '../src/data/enemies.js';
-import { MAW_SPIT_TYPES } from '../src/sim/enemies.js';
+import { mawSpitType } from '../src/sim/enemies.js';
 import {
   budget, incomeFactor, waveBonus, titanHp, speedRamp, spawnDuration, priceFor, RIG_CAP, SELL_RATE,
   SURGE_START, SURGE_CAP, TITAN_EVERY, ETA0, TIER_EFFICIENCY, EFFICIENCY_TOLERANCE, START_CASH,
@@ -52,15 +52,18 @@ const has = (n) => args.includes('--' + n);
 // ============================================================================================
 // Shared: one bot run (worker mode) and the sweep plan
 // ============================================================================================
+// Strong runs cluster either side of the wave 100 Titan, so one seed can move a small median by a
+// whole surge wave: the three bots the targets are judged on play 8 seeds per map, the Commander
+// variants (a looser target) 4, and the difficulty ladder 4 seeds on two maps.
 export const SWEEP_PLAN = {
   maps: MAP_ORDER,
-  seeds: [1, 2, 3, 4, 5],
+  seeds: [1, 2, 3, 4, 5, 6, 7, 8],
   waves: 200,                                   // uncapped in practice: every run must end by 160
   runs: [
     { bot: 'novice' }, { bot: 'solid' }, { bot: 'eco' },
-    { bot: 'solid', hero: 'vega' }, { bot: 'solid', hero: 'nova' }, { bot: 'solid', hero: 'brick' },
+    { bot: 'solid', hero: 'vega', seeds: [1, 2, 3, 4] }, { bot: 'solid', hero: 'nova', seeds: [1, 2, 3, 4] }, { bot: 'solid', hero: 'brick', seeds: [1, 2, 3, 4] },
   ],
-  difficulty: { maps: ['crater', 'dock'], seeds: [1, 2, 3], bots: ['solid', 'novice'], list: ['cadet', 'veteran', 'nightmare'] },
+  difficulty: { maps: ['crater', 'dock'], seeds: [1, 2, 3, 4], bots: ['solid', 'novice'], list: ['cadet', 'veteran', 'nightmare'] },
 };
 // eco >= solid is judged per map within ECO_TOL waves (seed noise: rig profit is a few percent of
 // a late defense, a fraction of one surge wave, docs/BALANCE.md 4) and strictly on the pooled median
@@ -178,7 +181,7 @@ class PopCounter {
       this.seen.add(e.id);
       const T = e.titan;
       if (T.kind !== 'maw') continue;
-      const type = MAW_SPIT_TYPES[Math.min(MAW_SPIT_TYPES.length - 1, T.tier - 1)];
+      const type = T.spitType || mawSpitType(T.tier);
       const n = T.paidVolleys * Math.min(8, 2 + T.tier) * ENEMIES[type].shells;
       this.maw.set(e.wave, (this.maw.get(e.wave) || 0) + n);
     }
@@ -702,9 +705,12 @@ async function bench(quick) {
 // ============================================================================================
 async function runSweep(file) {
   const jobs = [];
-  for (const s of SWEEP_PLAN.seeds) for (const m of SWEEP_PLAN.maps) for (const r of SWEEP_PLAN.runs) jobs.push([m, r.bot, s, SWEEP_PLAN.waves, r.hero || '-', 'pilot']);
+  for (const r of SWEEP_PLAN.runs) for (const s of r.seeds || SWEEP_PLAN.seeds) for (const m of SWEEP_PLAN.maps) jobs.push([m, r.bot, s, SWEEP_PLAN.waves, r.hero || '-', 'pilot']);
   const D = SWEEP_PLAN.difficulty;
   for (const d of D.list) for (const m of D.maps) for (const s of D.seeds) for (const b of D.bots) jobs.push([m, b, s, SWEEP_PLAN.waves, '-', d]);
+  // long runs first (Commanders, eco, solid, then the short novice runs) so the pool drains evenly
+  const weight = (j) => (j[1] === 'novice' ? 0 : j[5] === 'nightmare' ? 1 : j[4] !== '-' ? 3 : 2);
+  jobs.sort((a, b) => weight(b) - weight(a));
   // warm the bot profile cache once so the workers do not all measure it at the same time
   const { runGame } = await import('./headless.mjs');
   runGame({ map: 'crater', bot: 'solid', waves: 1, quiet: true });

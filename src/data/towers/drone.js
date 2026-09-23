@@ -208,20 +208,20 @@ export default {
           apply(s) { const w = gun(s); w.shipDamage = (w.shipDamage || 0) + 2; } },
         { name: 'Explosive Rounds', cost: 700, desc: 'Rounds deal 1 more damage to ships and switch to BLAST damage, which can hit Iron and frozen meteors but not Magma meteors or Geodes.',
           apply(s) { const w = gun(s); w.shipDamage = (w.shipDamage || 0) + 1; w.dtype = 'BLAST'; w.color = '#ffd08a'; main(s).dtype = 'BLAST'; } },
-        { name: 'Bomber Drones', cost: 2200, desc: 'Drones become bombers that fire a pair of homing BLAST missiles every second, each hitting for 2 damage and exploding for 5 damage across 55 units.',
+        { name: 'Bomber Drones', cost: 2200, desc: 'Drones become bombers that fire a pair of homing BLAST missiles every second, each hitting for 2 damage and exploding for 3 damage to up to 12 meteors across 55 units.',
           apply(s) {
             const w = gun(s);
             main(s).dtype = 'BLAST';
             w.dtype = 'BLAST'; w.damage = 2; w.pierce = 1; w.count = 2; w.spread = 0.5; w.speed = 520; w.homing = 8; w.cooldown = 1;
             w.range = 150; w.projRadius = 7; w.lifetime = 0.9; w.splashOnExpire = true;
-            w.splash = { radius: 55, damage: 5, pierce: 16, dtype: 'BLAST' };
+            w.splash = { radius: 55, damage: 3, pierce: 12, dtype: 'BLAST' };
             w.visual = 'missile'; w.color = '#ffb347';
             const b = bay(s); b.look = 'bomber'; b.droneColor = '#ff9f43';
           } },
         { name: 'Heavy Bombers', cost: 7500, desc: 'One more bomber joins, and missiles reload 11% faster and deal 8 damage (20 to ships) to up to 24 meteors in a wider blast.',
           apply(s) {
             const a = main(s), w = gun(s), sp = w.splash;
-            a.count += 1; sp.damage += 3; sp.radius += 15; sp.pierce += 8; sp.shipDamage = (sp.shipDamage || 0) + 12;
+            a.count += 1; sp.damage += 5; sp.radius += 15; sp.pierce += 12; sp.shipDamage = (sp.shipDamage || 0) + 12;
             w.cooldown *= 0.9; w.projRadius = 9;
           } },
         { name: 'Strike Wing', cost: 47000, desc: 'One more bomber joins, bombers fly faster and fire 3-missile salvos, 33% faster, that deal 17 damage (85 to ships) to up to 40 meteors. Unlocks Bombing Run: the wing carpet-bombs the channel.',
@@ -242,7 +242,7 @@ export default {
           apply(s) { main(s).droneSpeed *= 1.35; s.range += 50; gun(s).cooldown *= 0.87; } },
         { name: 'Sensor Drones', cost: 640, desc: 'Detection: drones can target Phantom meteors. Patrol radius +30.',
           apply(s) { s.detection = true; s.range += 30; } },
-        { name: 'Tractor Drones', cost: 1800, desc: 'Tractor beams drag each target (up to Aurora size) as far as 160 units back up the channel, and rounds deal 3 damage, pierce 3 meteors and fire 25% faster.',
+        { name: 'Tractor Drones', cost: 1700, desc: 'Tractor beams drag each target (up to Aurora size) as far as 160 units back up the channel, and rounds deal 3 damage, pierce 3 meteors and fire 25% faster.',
           apply(s) {
             const w = gun(s); w.damage += 2; w.pierce += 1; w.cooldown *= 0.8;
             const b = bay(s);

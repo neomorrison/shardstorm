@@ -432,8 +432,7 @@ const brick = {
     /* 13 */ ['Reloads 15% faster.', (s) => { faster(main(s), 0.87); }],
     /* 14 */ ['Blasts deal 1 more damage and shells deal 2 more on a direct hit.', (s) => { const a = main(s); a.splash.damage += 1; a.damage += 2; }],
     /* 15 */ ['Siege Optics: gains detection, and shells stun meteors for 0.3 s, hit Specters and deal 8 more damage to ships.', (s) => {
-      // the blast gets its own copy so an aura's bypass buff adds to it instead of replacing it
-      const a = main(s); s.detection = true; a.shipDamage += 8; addBypass(a, 'specter'); addBypass(a.splash, 'specter');
+      const a = main(s); s.detection = true; a.shipDamage += 8; addBypass(a, 'specter');
       a.splash.onHit = { ...(a.splash.onHit || {}), stun: { t: 0.3, shipT: 0 } }; a.visual = 'siegeshell'; a.color = '#ff7a2a';
     }],
     /* 16 */ [upgradeNote(BARRAGE_2), (s) => { replaceAbility(s, 'rocketbarrage', BARRAGE_2); }],

@@ -88,6 +88,15 @@ function pulseVisual(e) {
   return PULSE_SOUND_KEYS.has(aliased) ? aliased : 'generic';
 }
 
+// 'beam' hum per damage type: base pitch, waveform, lowpass cutoff and an optional crackle band.
+const BEAM_HUM = {
+  THERMAL: { freq: 110, type: 'sawtooth', filter: 600 },
+  ENERGY: { freq: 180, type: 'square', filter: 900, crackle: 4200 },
+  VOID: { freq: 72, type: 'sawtooth', filter: 420, crackle: 2600 },
+  CRYO: { freq: 330, type: 'triangle', filter: 1800 },
+  KINETIC: { freq: 140, type: 'triangle', filter: 700 },
+  BLAST: { freq: 90, type: 'sawtooth', filter: 500 },
+};
 const EXPLODE_COLOR = { BLAST: 900, THERMAL: 1500, ENERGY: 2200, CRYO: 2000, KINETIC: 1100, VOID: 2600 };
 
 // Ambient pad progression: A dorian (i, III, VII, v, IV, III), low register triads (Hz).
@@ -106,7 +115,7 @@ export class Audio {
     'shot', 'pop', 'hit', 'blocked', 'explode', 'zap', 'freeze', 'leak', 'cash',
     'waveStart', 'waveCleared', 'titan', 'titanDown', 'place', 'upgrade', 'sell',
     'ability', 'gameOver', 'shieldBreak', 'titanBlink', 'titanSpit', 'heroLevel', 'vault',
-    'pulse', 'crit', 'regrow', 'shieldUp',
+    'pulse', 'crit', 'regrow', 'shieldUp', 'beam',
   ];
 
   constructor() {
@@ -436,6 +445,7 @@ export class Audio {
         case 'crit': this._onCrit(e); break;
         case 'regrow': this._onRegrow(e); break;
         case 'shieldUp': this._onShieldUp(e); break;
+        case 'beam': this._onBeam(e); break;
         // engine extras (docs/ARCHITECTURE.md section 12) mapped onto existing voices
         case 'shieldBreak': this._onFreeze({ r: 260 }); this._onExplode({ r: 120, dtype: 'ENERGY' }); break;
         case 'titanBlink': this._onZap({ points: [0, 0, 0, 0, 0, 0] }); break;
@@ -642,6 +652,21 @@ export class Audio {
         this._tone({ time: t, freq: 240 - size * 70, freqEnd: 85, type: 'sine', duration: 0.11, attack: 0.005, decay: 0.05, release: 0.14, gain: 0.2 + size * 0.12 });
         this._noiseBurst({ time: t, duration: 0.1, attack: 0.005, release: 0.1, gain: 0.12, filterType: 'lowpass', filterFreq: colorFreq, filterFreqEnd: 400 });
       }
+    }
+  }
+
+  // Continuous weapons (Laser beams, damaging fields): the sim emits a cosmetic 'beam' event at
+  // most every 0.25 s per firing tower. Each one is a soft, short hum (with a faint crackle for
+  // ENERGY and VOID) keyed by damage type, throttled per dtype so a row of lasers blends into one
+  // low drone instead of stacking voices.
+  _onBeam(e) {
+    const dtype = (e && e.dtype) || 'THERMAL';
+    if (!this._allow('beam:' + dtype, 200, 2)) return;
+    const t = this.ctx.currentTime;
+    const hum = BEAM_HUM[dtype] || BEAM_HUM.THERMAL;
+    this._tone({ time: t, freq: hum.freq, freqEnd: hum.freq * 1.04, type: hum.type, duration: 0.2, attack: 0.04, decay: 0.08, sustain: 0.5, release: 0.1, gain: 0.05, filterFreq: hum.filter });
+    if (hum.crackle) {
+      this._noiseBurst({ time: t + 0.03, duration: 0.05, attack: 0.004, release: 0.05, gain: 0.035, filterType: 'highpass', filterFreq: hum.crackle });
     }
   }
 

@@ -91,11 +91,11 @@ export default {
       upgrades: [
         { name: 'Quick Loader', cost: 200, desc: 'Reloads 30% faster.',
           apply(s) { main(s).cooldown /= 1.3; } },
-        { name: 'Bomblets', cost: 600, desc: 'Each missile scatters 4 bomblets that explode on their own.',
+        { name: 'Bomblets', cost: 600, desc: 'Each missile scatters 3 bomblets that explode on their own.',
           apply(s) {
             const a = main(s);
             a.split = {
-              count: 4,
+              count: 3,
               attack: {
                 kind: 'projectile', damage: 0, pierce: 1, speed: 260, lifetime: 0.28, projRadius: 6,
                 splash: { radius: 26, damage: 1, pierce: 6 }, splashOnExpire: true, visual: 'bomblet', color: '#ffd23d',

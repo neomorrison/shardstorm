@@ -60,8 +60,7 @@ export default {
             const a = main(s);
             a.damage += 114; a.shipDamage = (a.shipDamage || 0) + 1036; a.pierce = Math.max(a.pierce, 10);
             addBypass(a, 'KINETIC', 'FROZEN');
-            // the shockwave carries its own copy of the bypass so an aura's bypass buff adds to it
-            a.splash = { radius: 60, damage: 12, pierce: 30, dtype: 'KINETIC', shipDamage: 60, bypass: a.bypass.slice(), visual: 'cracker', color: '#ffe08a' };
+            a.splash = { radius: 60, damage: 12, pierce: 30, dtype: 'KINETIC', shipDamage: 60, visual: 'cracker', color: '#ffe08a' };
             a.visual = 'railslug'; a.color = '#fff3b0';
           } },
       ],

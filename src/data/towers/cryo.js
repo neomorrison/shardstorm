@@ -172,8 +172,7 @@ export default {
             a.damage += 20; a.shipDamage = (a.shipDamage || 0) + 200; a.pierce = 4; a.projRadius = 10; a.scale = 1.6; a.color = '#dff8ff';
             a.bypass = [...(a.bypass || []), 'CRYO'];
             setHit(a, { freeze: { ...a.onHit.freeze, shipMult: 0.25 }, slow: { shipMult: 0.25, t: 3 } });
-            // the blast carries its own bypass so an aura's bypass buff (Beacon, Shatter Field) adds to it
-            a.splash = { radius: 70, damage: 4, pierce: 25, dtype: 'CRYO', bypass: a.bypass.slice(), onHit: { freeze: { t: 1.5, shipMult: 0.5 } }, visual: 'frostburst', color: '#dff8ff' };
+            a.splash = { radius: 70, damage: 4, pierce: 25, dtype: 'CRYO', onHit: { freeze: { t: 1.5, shipMult: 0.5 } }, visual: 'frostburst', color: '#dff8ff' };
           } },
       ],
     },

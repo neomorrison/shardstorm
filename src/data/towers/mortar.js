@@ -264,8 +264,6 @@ export default {
             sp.damage += 26; sp.radius += 64; sp.pierce += 200; sp.shipDamage = (sp.shipDamage || 0) + 118;
             addOnHit(sp, { stun: { t: 1, shipT: 0.3 } });
             a.bypass = [...(a.bypass || []), 'BLAST'];
-            // the blast carries its own bypass so an aura's bypass buff adds to it
-            sp.bypass = [...(sp.bypass || []), 'BLAST'];
             a.count = Math.max(3, a.count || 1);
             a.scale = 2; a.projRadius = 10; a.arc = 300; a.flightTime += 0.25; a.color = '#fff3b0';
             const f = fx(s);

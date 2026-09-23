@@ -442,9 +442,13 @@ export class Sim {
     return w < lo.wave ? 0 : 0.5 * (w - lo.wave + 1) / (lo.full - lo.wave + 1);
   }
 
+  // Turning auto-start on takes effect from the next clear: a build phase that is already waiting
+  // for the player (whether or not it followed a clear) is left to the player, so the toggle never
+  // launches the wave the player is still building for.
   setAutoStart(on) {
+    const was = this.state.autoStart;
     this.state.autoStart = !!on;
-    if (on) this._autoTimer = Math.min(this._autoTimer, AUTO_START_DELAY);
+    if (on && !was && this.state.phase === 'build') this._autoArmed = false;
     return { ok: true };
   }
 

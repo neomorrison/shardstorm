@@ -229,6 +229,17 @@ export function fireMortar(sim, t, a) {
   return true;
 }
 
+// Continuous weapons (beams and damaging fields) deal damage every tick without a shot, so they
+// emit a cosmetic 'beam' event for the audio hum instead: at most once per BEAM_SOUND_EVERY
+// seconds per attack while it is firing. Not in CRITICAL_EVENTS, so the event cap may drop it.
+export const BEAM_SOUND_EVERY = 0.25;
+function beamSound(sim, t, a, st, x, y) {
+  const now = sim.state.time;
+  if (st.snd !== undefined && now - st.snd < BEAM_SOUND_EVERY - 1e-9 && now >= st.snd) return;
+  st.snd = now;
+  sim.emit({ t: 'beam', tower: t.id, type: t.type, x, y, dtype: a.dtype, attack: a.key });
+}
+
 function beamState(t, key) {
   let bs = t.data['_beam_' + key];
   if (!bs) bs = t.data['_beam_' + key] = { ids: [], lockT: [], acc: 0 };
@@ -269,6 +280,7 @@ export function updateBeam(sim, t, a, dt) {
     }
   }
   if (bs.acc > a.tickRate) bs.acc = a.tickRate;
+  beamSound(sim, t, a, bs, t.x, t.y);
   // visuals
   const beams = t.data.beams || (t.data.beams = []);
   const pool = t.data._beamPool || (t.data._beamPool = []);
@@ -316,6 +328,7 @@ export function updateField(sim, t, a, dt) {
     }
     if (dmgNow && !e.dead) damageEnemy(sim, e, a.dps * a.tickRate, a.dtype, a._src, -1, a.onHit || null);
   }
+  if (a.dps > 0) beamSound(sim, t, a, fd, t.x, t.y);
 }
 
 function orbitPoint(sim, t, a, idx, count, out) {

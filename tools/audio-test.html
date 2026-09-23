@@ -158,6 +158,10 @@ for (const [label, visual, dtype] of PULSE_VISUALS) {
 addButton(pulseEl, 'crit (bright chime)', () => audio.onEvents([{ t: 'crit', x: 0, y: 0, amount: 40 }]));
 addButton(pulseEl, 'regrow (rising chime)', () => audio.onEvents([{ t: 'regrow', x: 0, y: 0, type: 'rust', id: 1 }]));
 addButton(pulseEl, 'shieldUp (recharge whoosh)', () => audio.onEvents([{ t: 'shieldUp', x: 0, y: 0, id: 1 }]));
+// Beam hum: sustained beams and damaging fields emit 'beam' at most every 0.25 s per attack.
+for (const dt of ['ENERGY', 'THERMAL', 'VOID', 'CRYO', 'KINETIC', 'BLAST']) {
+  addButton(pulseEl, `beam: ${dt}`, () => audio.onEvents([{ t: 'beam', tower: 1, type: 'laser', x: 0, y: 0, dtype: dt, attack: 'main' }]));
+}
 
 // Pops and combat
 const popEl = document.getElementById('popButtons');

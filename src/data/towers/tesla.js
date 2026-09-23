@@ -177,8 +177,8 @@ export default {
           apply(s) { const a = main(s); a.jumps += 2; a.jumpRange += 15; } },
         { name: 'High Voltage', cost: 900, desc: 'Arcs deal 2 damage and fire 15% faster.',
           apply(s) { const a = main(s); a.damage += 1; a.cooldown *= 0.87; } },
-        { name: 'Arc Web', cost: 1200, desc: 'Fires 2 chains per shot, each leaping through up to 10 meteors up to 125 units apart.',
-          apply(s) { const a = main(s); a.count = (a.count || 1) + 1; a.jumps += 4; a.jumpRange += 15; a.color = '#7fe3ff'; a.visual = 'arcweb'; } },
+        { name: 'Arc Web', cost: 1700, desc: 'Fires 2 chains per shot, each leaping through up to 9 meteors up to 125 units apart.',
+          apply(s) { const a = main(s); a.count = (a.count || 1) + 1; a.jumps += 3; a.jumpRange += 15; a.color = '#7fe3ff'; a.visual = 'arcweb'; } },
         { name: 'Tempest Grid', cost: 7500, desc: 'Chains fire twice as fast and deal 5 damage (15 to ships). Range and arc reach +20.',
           apply(s) { const a = main(s); a.damage += 3; a.shipDamage = (a.shipDamage || 0) + 10; a.cooldown *= 0.5; a.jumpRange += 20; s.range += 20; } },
         { name: 'Storm Crown', cost: 25000, desc: 'Chains fire 4 times as fast and deal 8 damage (30 to ships). Range +35.',
@@ -228,9 +228,9 @@ export default {
     {
       name: 'Overload',
       upgrades: [
-        { name: 'Hot Coils', cost: 450, desc: 'Arcs deal 2 damage.',
+        { name: 'Hot Coils', cost: 420, desc: 'Arcs deal 2 damage.',
           apply(s) { main(s).damage += 1; } },
-        { name: 'Scanner Coil', cost: 500, desc: 'Detection: arcs can target Phantom meteors. Range +20.',
+        { name: 'Scanner Coil', cost: 480, desc: 'Detection: arcs can target Phantom meteors. Range +20.',
           apply(s) { s.detection = true; s.range += 20; } },
         { name: 'Overload', cost: 2400, desc: 'Arcs become heavy overload bolts that deal 12 damage (40 to ships) to one target and stun it for 0.5 s (ships 0.15 s).',
           apply(s) {

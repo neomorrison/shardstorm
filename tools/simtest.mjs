@@ -11,7 +11,7 @@ import { Path } from '../src/sim/path.js';
 import { Rng } from '../src/core/rng.js';
 import { buildWave } from '../src/sim/wavegen.js';
 import { MAW_SPIT_EVERY, mawSpitType } from '../src/sim/enemies.js';
-import { EVENT_CAP } from '../src/sim/game.js';
+import { EVENT_CAP, CRITICAL_EVENTS } from '../src/sim/game.js';
 import { computeBaseStats, finalizeStats } from '../src/sim/towers.js';
 import { titanHp } from '../src/data/economy.js';
 
@@ -724,13 +724,31 @@ section('waves, early send, autostart', () => {
   eq(sim.state.activeWaves.length, 2, 'two waves active');
   const cleared = [];
   n = 0;
+  sim.setAutoStart(true); // on during a wave: fires in the build phase that follows the clear
   while (sim.state.phase === 'wave' && n++ < 60 * 600) { sim.step(); for (const e of sim.drainEvents()) if (e.t === 'waveCleared') cleared.push(e.wave); }
   ok(cleared.includes(1) && cleared.includes(2), 'both waves cleared: ' + cleared.join(','));
   eq(sim.state.cleared, 2, 'cleared counter');
   eq(sim.state.phase, 'build', 'back to build');
-  sim.setAutoStart(true);
   for (let i = 0; i < Math.round(1.2 / TICK); i++) sim.step();
   eq(sim.state.wave, 3, 'autostart launched the next wave');
+  // toggled on while a cleared build phase waits for the player: no launch until the next clear
+  {
+    const s2 = newSim(); s2.state.cash = 1e6; s2.state.lives = 1e9;
+    for (let i = 0; i < 6; i++) place(s2, 'pulse', i * 3);
+    s2.startWave();
+    let k = 0; while (s2.state.phase === 'wave' && k++ < 60 * 600) s2.step();
+    eq(s2.state.phase, 'build', 'wave 1 cleared with auto-start off');
+    s2.setAutoStart(true);
+    for (let i = 0; i < Math.round(5 / TICK); i++) s2.step();
+    ok(s2.state.wave === 1 && s2.state.phase === 'build', 'turning auto-start on in a waiting build phase does not launch');
+    s2.setAutoStart(true); // repeated (settings patch): still idle
+    for (let i = 0; i < Math.round(2 / TICK); i++) s2.step();
+    eq(s2.state.wave, 1, 'a repeated setAutoStart(true) does not launch either');
+    s2.startWave();
+    k = 0; while (s2.state.phase === 'wave' && k++ < 60 * 600) s2.step();
+    for (let i = 0; i < Math.round(1.2 / TICK); i++) s2.step();
+    eq(s2.state.wave, 3, 'auto-start fires after the next clear');
+  }
   const pv = sim.wavePreview(4);
   ok(Array.isArray(pv) && pv.length > 0 && pv[0].type, 'wavePreview');
 });
@@ -1163,6 +1181,52 @@ section('QA regressions (engine, 2026-09 review)', () => {
     const plain = finalizeStats(base, null).attacks.main.splash.pierce;
     const buffed = finalizeStats(base, { rateMult: 1, rangeMult: 1, pierceAdd: 2, damageAdd: 0, detection: false, bypass: [], discount: 0, shipDamageAdd: 0 }).attacks.main.splash.pierce;
     eq(buffed, plain + 2, 'aura pierceAdd applies to mortar splash pierce');
+  }
+
+  // aura bypass merges with an attack's own bypass on its splash (Frost Titan, Planet Cracker,
+  // Doomsday Battery, Brick's Siege Optics), whether or not the splash has a bypass of its own
+  {
+    const aura = { rateMult: 1, rangeMult: 1, pierceAdd: 0, damageAdd: 0, detection: false, bypass: ['FROZEN', 'prism'], discount: 0, shipDamageAdd: 0 };
+    const has = (arr, xs) => xs.every((x) => (arr || []).indexOf(x) >= 0);
+    const cases = [
+      [TOWERS.cryo, [0, 2, 5], ['CRYO']],
+      [TOWERS.rail, [5, 0, 2], ['KINETIC']],
+      [TOWERS.mortar, [5, 2, 0], ['BLAST']],
+    ];
+    for (const [def, lv, own] of cases) {
+      let a = null;
+      for (const L of [lv, [lv[0], lv[2], lv[1]], [lv[1], lv[0], lv[2]], [lv[2], lv[1], lv[0]], [lv[1], lv[2], lv[0]], [lv[2], lv[0], lv[1]]]) {
+        const st = computeBaseStats(def, L);
+        const x = Object.values(st.attacks).find((q) => q && q.splash && has(q.bypass, own));
+        if (x) { a = finalizeStats(st, aura).attacks[Object.keys(st.attacks).find((k) => st.attacks[k] === x)]; break; }
+      }
+      ok(!!a, `${def.id}: found the tier 5 attack with its own ${own.join(',')} bypass and a splash`);
+      if (a) ok(has(a.splash.bypass, own.concat(aura.bypass)), `${def.id}: splash inside a bypass aura keeps its own ${own.join(',')} bypass and gains the aura's (got ${JSON.stringify(a.splash.bypass)})`);
+    }
+    // a splash that never had a bypass of its own inherits the attack's plus the aura's
+    const syn = { attacks: { main: { kind: 'projectile', dtype: 'BLAST', bypass: ['BLAST'], splash: { radius: 40, damage: 1 } } }, abilities: [], range: 150 };
+    const f = finalizeStats(syn, aura).attacks.main;
+    ok(has(f.splash.bypass, ['BLAST', 'FROZEN', 'prism']) && has(f.bypass, ['BLAST', 'FROZEN', 'prism']), 'synthetic splash inherits own + aura bypass');
+    const g = finalizeStats(syn, null).attacks.main;
+    ok(has(g.splash.bypass, ['BLAST']) && g.splash.bypass.indexOf('FROZEN') < 0, 'no aura: splash keeps just the attack bypass');
+    const hb = finalizeStats(computeBaseStats(HEROES.brick, [0, 0, 0], 20), aura).attacks.main;
+    ok(has(hb.splash.bypass, ['specter', 'FROZEN', 'prism']), 'Brick level 20 blasts hit Specters inside a bypass aura');
+  }
+
+  // continuous weapons emit a throttled cosmetic 'beam' event for audio
+  {
+    const s = newSim(); s.state.cash = 1e6; s.state.lives = 1e9;
+    const id = place(s, 'laser');
+    const t = s.getTower(id);
+    const np = s.nearestPathPoint(t.x, t.y);
+    for (let i = 0; i < 30; i++) s.spawnEnemy('obsidian', { d: Math.max(0, np.d - 120 + i * 10) });
+    s.startWave();
+    let beams = 0; const types = new Set();
+    const steps = Math.round(4 / TICK);
+    for (let i = 0; i < steps; i++) { s.step(); for (const e of s.drainEvents()) if (e.t === 'beam' && e.tower === id) { beams++; types.add(e.dtype); } }
+    ok(beams >= 8 && beams <= 17, 'laser emits 1 beam event per 0.25 s while firing: ' + beams + ' in 4 s');
+    ok(types.has('THERMAL'), 'beam event carries the dtype');
+    ok(!CRITICAL_EVENTS.has('beam'), 'beam events are cosmetic (droppable under the event cap)');
   }
 });
 

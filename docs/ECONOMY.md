@@ -203,10 +203,10 @@ The proofs are in docs/BALANCE.md 3; `node tools/balance.mjs` checks every claim
 3. **Bounded passive income.** Rig cap, vault caps, supply drop counts, everything times c(w). Checked: maximum theoretical passive income per wave for waves 1 to 160, and an engine payout check against it.
 4. **Monotone threat.** B(w+1) > B(w) for all w >= 1 (checked to wave 600), log-convex from the surge start to SURGE_CAP, authored waves inside +-20% and procedural waves inside +-5%, Titan hulls increasing. Checked by the balance report.
 5. **Upgrades are worth buying.** Efficiency rises with tier per section 3.2. Checked by the bench table (pass rate by tower and tier; no config HIGH).
-6. **Skill expression.** On every map, Pilot, several seeds, with and without a Commander (medians):
+6. **Skill expression.** On every map, Pilot, 8 seeds per bot (4 per Commander), with and without a Commander (medians; `SWEEP_PLAN` in tools/balance.mjs):
    - Novice bot (buys cheap towers, random legal spots, never upgrades past tier 2) loses between waves 25 and 55.
    - Solid bot (greedy best-efficiency purchases near the path, upgrades toward tier 4 and 5) reaches waves 70 to 110 (with a Commander: up to 130).
    - Eco bot (Solid bot plus Mining Rigs early) reaches at least as far as Solid: strictly on the median pooled over all maps, and within 2 waves of it on each map (seed noise; `TARGETS.ecoTol` in tools/balance.mjs).
    - No bot passes wave 160.
-   - Difficulty orders the results: Cadet >= Pilot >= Veteran >= Nightmare.
+   - Difficulty orders the results: Cadet >= Pilot >= Veteran >= Nightmare (solid and novice, pooled over Crater Basin and Orbital Dock, 4 seeds each).
    - No tower type holds more than half of the solid bot's credits at the end of a run.

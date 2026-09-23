@@ -145,8 +145,9 @@ sim.map        // map def plus sim.paths: Path[]
 | `place` / `upgrade` / `sell` | tower (id), type, path, tier, value | audio, UI refresh |
 | `ability` | id, tower, x, y | effect, audio |
 | `gameOver` | wave | game over screen |
+| `beam` | tower, type, x, y, dtype, attack | audio hum (cosmetic, at most every 0.25 s per firing beam or damaging field, `BEAM_SOUND_EVERY` in `src/sim/attacks.js`) |
 
-Beams (lasers) and fields are continuous: the renderer reads `tower.data.beams = [{x1,y1,x2,y2,width,color}]` and `tower.stats` instead of events.
+Beams (lasers) and fields are continuous: the renderer reads `tower.data.beams = [{x1,y1,x2,y2,width,color}]` and `tower.stats` instead of events. Their only event is the throttled `beam` above, for sound.
 
 ## 5. Towers: data format
 

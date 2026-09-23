@@ -1338,6 +1338,16 @@ kbd {
   .emblem { display: none; }
   .wordmark { font-size: clamp(40px, 8vw, 80px); }
   .btn--xl { height: 50px; }
+  /* game over fits a landscape phone: the Retry, Maps and Title row stays on screen */
+  .modal--over { padding-top: 16px; padding-bottom: 14px; }
+  .over__wave { margin-top: 6px; }
+  .over__wave-n { font-size: 56px; }
+  .record-banner { margin-top: 6px; padding: 4px 14px; font-size: 12px; }
+  .over__best { margin-top: 6px; }
+  .over__stats { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 6px; margin-top: 10px; }
+  .over__stat { padding: 6px 8px; }
+  .over__stat dd { font-size: 16px; }
+  .over__menu { margin-top: 12px; }
 }
 
 /* ============================================================== motion preferences */

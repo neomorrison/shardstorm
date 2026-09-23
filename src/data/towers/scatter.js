@@ -293,7 +293,7 @@ export default {
             sp.splitOn = 'hit';
             syncSplits(a);
           } },
-        { name: 'Shatterstorm', cost: 13000, desc: 'Fires 4 more crystals 2.5 times as fast with 15 more range, each crystal bursts into 4 splinters, and every shard deals 3 damage (8 to ships) and splits three generations deep.',
+        { name: 'Shatterstorm', cost: 16000, desc: 'Fires 4 more crystals 2.5 times as fast with 15 more range, each crystal bursts into 4 splinters, and every shard deals 3 damage (8 to ships) and splits three generations deep.',
           apply(s) {
             const a = main(s);
             s.range += 15;

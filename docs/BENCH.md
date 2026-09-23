@@ -204,21 +204,21 @@ All three currently pass.
 
 ## 7. Latest results
 
-Full default run after the tower tuning and the macro balance pass, official windows, regenerated
-with `node tools/bench.mjs --json out/balance/bench.json`. Counts are over the 25 default configs.
+Full default run after the final balance pass (2026-09), official windows, regenerated with
+`node tools/bench.mjs --json out/balance/bench.json`. Counts are over the 25 default configs.
 `tools/balance.mjs` section 4 grades the same rows (and the utility, support and income contracts)
 and fails on any HIGH; docs/BALANCE.md 3.5 charts efficiency by tier.
 
 | Tower | PASS | LOW | HIGH | Best config (eta vs target, graded on) | Notes |
 |---|---|---|---|---|---|
 | Pulse Turret | 24 | 1 | 0 | 5-2-0: 30.4 vs 25 (DENSE) | 0-0-2 (7.0 vs 7.3 floor) is the detection step of Marksman; Marksman T3+ is graded on SHIP, Starlance on DENSE |
-| Scatter Pod | 25 | 0 | 0 | 5-0-0: 30.8 vs 25 (SWARM) | Solar Flare graded on SHIP |
+| Scatter Pod | 25 | 0 | 0 | 2-0-5: 31.3 vs 25 (SWARM) | Solar Flare graded on SHIP; Shatterstorm costs 16,000 (was 13,000: with children visible to same-tick splash, 2-0-5 read 36.5, HIGH) |
 | Rail Sniper | 25 | 0 | 0 | 5-0-2: 32.8 vs 25 (SHIP, global) | SHIP graded at 0.7 x target for global range (section 3); a ship hull stops a penetrating slug in real waves |
-| Missile Pod | 24 | 1 | 0 | 0-2-0: 13.5 vs 11.2 (DENSE) | 5-0-2 reads 16.0 on SWARM4X (0.64); Hunter-Killer graded on SHIP |
-| Tesla Coil | 25 | 0 | 0 | 0-2-5: 33.3 vs 25 (SHIP) | Overload graded on SHIP |
+| Missile Pod | 24 | 1 | 0 | 0-5-2: 29.0 vs 25 (DENSE) | 5-0-2 reads 16.0 on SWARM4X (0.64); Hunter-Killer graded on SHIP; Bomblets scatter 3 bomblets (was 4: 0-2-0 read 24.3, HIGH, now 11.4) |
+| Tesla Coil | 25 | 0 | 0 | 0-2-5: 33.4 vs 25 (SHIP) | Overload graded on SHIP; Arc Web chains reach 9 meteors and cost 1,700 (were 10 and 1,200: 3-0-0 read 19.8, HIGH, now 15.3); Hot Coils 420 and Scanner Coil 480 (were 450 and 500) keep 0-0-2 above the floor |
 | Laser Array | 25 | 0 | 0 | 0-0-2: 13.4 vs 11.2 (DENSE) | |
-| Drone Bay | 22 | 3 | 0 | 2-5-0: 33.0 vs 25 (SHIP) | Tractor 0-0-2 (detection) and the Gravity Hauler T5 (control, 0.58x) read low |
-| Orbital Mortar | 22 | 3 | 0 | 0-2-0: 14.3 vs 11.2 (SWARM) | Firestorm 0-5-0 / 2-5-0 and 0-2-5 read 0.55 to 0.64 on SWARM4X; Doomsday deals 200 to ships (was 230, 5-0-2 read HIGH on SHIP) |
+| Drone Bay | 22 | 3 | 0 | 2-5-0: 33.0 vs 25 (SHIP) | Tractor 0-0-2 (detection) and the Gravity Hauler T5 (control, 0.58x) read low; Bomber Drones blasts deal 3 to 12 meteors (were 5 to 16: 0-3-0 read 22.1, HIGH, now 12.6; Heavy Bombers still ends at 8 to 24); Tractor Drones costs 1,700 (was 1,800) |
+| Orbital Mortar | 22 | 3 | 0 | 0-2-0: 14.4 vs 11.2 (SWARM) | Firestorm 0-5-0 / 2-5-0 and 0-2-5 read 0.55 to 0.64 on SWARM4X; Doomsday deals 200 to ships (was 230, 5-0-2 read HIGH on SHIP) |
 | Cryo Emitter | utility | | | leaks through the corridor fall from 1965 to 10 to 25 with Frost Titan or Glass Storm | graded on leak and MDS gain by `tools/balance.mjs` (25/25 protect the corridor) |
 | Gravity Well | utility | | | Crusher T5 and Rewind crosspaths cut leaks to near 0 | graded as above (25/25) |
 | Mining Rig | 12 PASS | 13 WATCH | | P 9.3 to 50 | every combo pays back in 8 waves or more (the hard floor) |
