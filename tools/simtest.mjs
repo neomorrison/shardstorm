@@ -5,11 +5,12 @@ import { TOWERS } from '../src/data/towers/index.js';
 import { HEROES } from '../src/data/heroes.js';
 import { MAPS } from '../src/data/maps.js';
 import { ENEMIES, familyMass } from '../src/data/enemies.js';
-import { priceFor, SELL_RATE, heroXpForWave, heroXpNeed, TICK, incomeFactor } from '../src/data/economy.js';
+import { priceFor, SELL_RATE, heroXpForWave, heroXpNeed, TICK, incomeFactor, BASE_SPEED } from '../src/data/economy.js';
 import { payWaveIncome } from '../src/sim/economy.js';
 import { Path } from '../src/sim/path.js';
 import { Rng } from '../src/core/rng.js';
 import { buildWave } from '../src/sim/wavegen.js';
+import { MAW_SPIT_EVERY } from '../src/sim/enemies.js';
 
 const verbose = process.argv.includes('--verbose');
 let passed = 0, failed = 0;
@@ -464,6 +465,65 @@ section('leak mass', () => {
   for (let i = 0; i < 30; i++) sim3.step();
   eq(sim3.state.phase, 'over', 'titan leak ends the game');
   ok(sim3.drainEvents().some((e) => e.t === 'gameOver'), 'gameOver event');
+});
+
+// Exploit regressions (out/exploits/): bounty is paid once per shell the storm sent, and no
+// pop-and-regrow cycle can refresh a family's rewind budget.
+section('bounty conservation (exploit regressions)', () => {
+  // regrow farm: hold a nanite Iron family frozen and chip it every 4 s so it keeps regrowing
+  const sim = newSim();
+  const fam = sim.spawnEnemy('iron', { d: 300, nanite: true, wave: 32 });
+  const shells = fam.def.shells;
+  let paid = 0;
+  const orig = sim._onPop.bind(sim);
+  sim._onPop = (e, c, t) => { if (e.wave === 32) paid += c; orig(e, c, t); };
+  const pops0 = sim.state.stats.pops;
+  for (let s = 0; s < Math.round(30 / TICK); s++) {
+    for (const e of sim.state.enemies) if (!e.dead && e.wave === 32) e.frozenT = 1;
+    if (s % Math.round(4 / TICK) === 0) for (const e of sim.state.enemies.slice()) if (!e.dead && e.wave === 32) sim.damage(e, 1, 'BLAST', SRC('BLAST'));
+    sim.step();
+  }
+  ok(sim.state.stats.pops - pops0 > shells, 'the held nanite family regrew (pops exceed its shells)');
+  ok(paid <= shells * incomeFactor(32) + 1e-9, `a regrowing nanite family pays at most its own ${shells} shells (paid ${paid})`);
+  // a nanite family destroyed without regrowing pays every shell, as before
+  const s2 = newSim();
+  const c0 = s2.state.stats.cashEarned;
+  const f2 = s2.spawnEnemy('iron', { d: 300, nanite: true, wave: 60 });
+  const n2 = f2.def.shells;
+  for (let k = 0; k < 40 && s2.state.enemies.some((e) => !e.dead); k++) for (const e of s2.state.enemies.slice()) if (!e.dead) s2.damage(e, 1e4, 'VOID', SRC('VOID'));
+  near(s2.state.stats.cashEarned - c0, n2 * incomeFactor(60), 'an unregrown nanite family pays all of its shells', 1e-9);
+  // regrown shells: partial bounty survives regrowth exactly once
+  const s3 = newSim();
+  const r = s3.spawnEnemy('rose', { d: 100, nanite: true, origType: 'iron', wave: 30 });
+  r.speedMult = 0.01;
+  for (let i = 0; i < Math.round(3 / TICK) + 2; i++) s3.step();
+  eq(r.type, 'iron', 'rose regrew to iron');
+  eq(r.owed, ENEMIES.rose.shells, 'a regrown shell still owes only the shells it had');
+  const c3 = s3.state.stats.cashEarned;
+  for (let k = 0; k < 40 && s3.state.enemies.some((e) => !e.dead); k++) for (const e of s3.state.enemies.slice()) if (!e.dead) s3.damage(e, 1e4, 'VOID', SRC('VOID'));
+  near(s3.state.stats.cashEarned - c3, ENEMIES.rose.shells * incomeFactor(30), 'the regrown family pays what the rose was worth', 1e-9);
+  // Maw: volleys past one full-speed crossing pay nothing
+  const s4 = newSim();
+  const maw = s4.spawnEnemy('titan', { d: 600, titan: { kind: 'maw', tier: 2, hp: 1e9 } });
+  const cross = (s4.pathLength(0) - 600) / (maw.def.speed * BASE_SPEED);
+  eq(maw.titan.paidVolleys, Math.ceil(cross / MAW_SPIT_EVERY), 'the Maw pays for the volleys of one unslowed crossing');
+  maw.titan.paidVolleys = 1;
+  maw.speedMult = 0.001; // a stalled Maw
+  for (let i = 0; i < Math.round((2 * MAW_SPIT_EVERY + 0.2) / TICK); i++) s4.step();
+  const spat = s4.state.enemies.filter((e) => !e.dead && !e.titan);
+  ok(spat.some((e) => e.owed === -1) && spat.some((e) => e.owed === 0), 'first volley paid, second volley unpaid');
+  const unpaid = spat.filter((e) => e.owed === 0);
+  const c4 = s4.state.stats.cashEarned;
+  for (let k = 0; k < 40 && unpaid.some((e) => !e.dead); k++) for (const e of unpaid) if (!e.dead) s4.damage(e, 1e4, 'VOID', SRC('VOID'));
+  for (let k = 0; k < 40; k++) for (const e of s4.state.enemies.slice()) if (!e.dead && !e.titan && e.owed === 0) s4.damage(e, 1e4, 'VOID', SRC('VOID'));
+  eq(s4.state.stats.cashEarned - c4, 0, 'meteors of an unpaid Maw volley (and their children) pay nothing');
+  // rewind budgets are per family: children inherit Undertow and tractor budgets
+  const s5 = newSim();
+  const j = s5.spawnEnemy('jade', { d: 400 });
+  j.gRew = 120; j._towed = 70;
+  s5.damage(j, 1, 'VOID', SRC('VOID'));
+  const kids = s5.state.enemies.filter((e) => !e.dead && e.type === 'cobalt');
+  ok(kids.length > 0 && kids.every((k) => k.gRew === 120 && k._towed === 70), 'children inherit the rewind budget their parent used');
 });
 
 section('storm titans', () => {

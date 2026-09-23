@@ -33,7 +33,7 @@ A run is a loop of two flows.
 | Starting credits | 650 | ECONOMY 1.4 |
 | c(w) | 1 up to wave 50, then (50/w)^3 | ECONOMY 1.1 |
 | Wave bonus | 200 + w | ECONOMY 1.2 |
-| Surge | exp(0.0032 x max(0, w - 65)^2) | ECONOMY 4.1 |
+| Surge | exp(0.0032 x max(0, w - 65)^2) up to wave 165, then along its tangent (finite numbers only) | ECONOMY 4.1 |
 | Titan hull | 0.7 x sqrt(tier) x B(w) / S(w)^0.5, w = 20 x tier | ECONOMY 4.6 |
 | Global-range SHIP grading | 0.7 x target | ECONOMY 3.2 |
 | Specter scout hull | 0.2 x hull, empty hold | ECONOMY 4.8 |
@@ -112,8 +112,9 @@ Pop income assumes every shell of the wave is destroyed; cumulative income start
 5. *Vaults.* Interest is paid only on the balance up to the cap and is scaled by `c(w)` (it is income), withdrawing moves the balance to credits one for one, and a vault balance is counted in `W` in full, so withdraw and deposit loops change nothing.
 6. *Abilities* never touch credits directly (no ability calls a payout; checked by search in `src/data/**`). They destroy meteors, whose bounty is income, or buff towers.
 7. *Save and load* restore credits, paid amounts and vault balances exactly.
+8. *Bounty conservation.* The argument above counts bounty as income, so it would not notice a defense that makes the storm pay for the same shell twice. Two mechanics create shells on the field: nanite regrowth and the Maw's volleys. A regrown shell and its children share the bounty the shell had before it regrew, and the Maw pays only for the volleys of one full-speed crossing (docs/ECONOMY.md 1.1). So every wave pays bounty for at most the shells in its groups, its Titan and the Maw's paid volleys.
 
-Every action therefore leaves `W - E` equal or lower. **Checked by** `tools/balance.mjs` section 1: targeted undo, sell, discount, vault and save/load tests, every activated ability in the game fired at the first usable tick, at random ticks and late in the wave (with Commanders at level 20), and thousands of random commands across all maps and difficulties, asserting `W - E` never rises by more than float rounding.
+Every action therefore leaves `W - E` equal or lower. **Checked by** `tools/balance.mjs` section 1: targeted undo, sell, discount, vault and save/load tests, every activated ability in the game fired at the first usable tick, at random ticks and late in the wave (with Commanders at level 20), and thousands of random commands across all maps and difficulties, asserting `W - E` never rises by more than float rounding. The ability runs also count paid pops per wave and assert they never exceed the shells the wave sent; `tools/simtest.mjs` (bounty conservation) holds a nanite family frozen while chipping it, stalls a Maw, and checks both pay nothing extra.
 
 ### 3.2 Bounded passive income
 
@@ -152,9 +153,9 @@ Supply drops: 200 per Supply Drop Rail, 750 for the one Quartermaster; at most 6
 
 **Claim.** Every run ends, whatever the player does.
 
-**Proof.** The map has a finite buildable area and towers keep a minimum spacing, so at most `N_max` towers exist. Each tower config has a bounded damage output (finitely many configs, bounded buffs, abilities on cooldowns), so the whole defense deals at most `DPS_max` damage per second. Now bound how long one ship can stay on the field. The slowest ship class moves at 0.18 x 90 = 16.2 units per second times `v(w) >= 1`; the strongest ship slow in the game is 0.25 (Frost Titan), and slows do not stack (the strongest applies); a freeze on a ship is only a 0.6 slow; stuns on ships last at most 1.5 s and a ship cannot be stunned again for `SHIP_STUN_IMMUNE = 1` s afterwards, so it moves at least 40% of the time; Gravity Well pulls on ships have a per-ship budget (at most 320 units). A ship therefore crosses a channel of length `L` in at most `T_max = (L + 320) / (16.2 x 0.25 x 0.4)` seconds, a constant of the map. It absorbs at most `DPS_max x T_max` damage before it reaches the Core. Once the spawn cap binds, every hull in wave `w` is multiplied by `H(w)`, and `H(w) -> infinity` because `B(w)` grows without bound while the unmultiplied capacity of 300 spawns is fixed. So there is a wave where a single Worldbreaker hull (20,000 x `H(w)`) exceeds `DPS_max x T_max`; it leaks, its remaining mass is larger than any Core Integrity (at most 200), and the run ends. Storm Titans end it sooner.
+**Proof.** The map has a finite buildable area and towers keep a minimum spacing, so at most `N_max` towers exist. Each tower config has a bounded damage output (finitely many configs, bounded buffs, abilities on cooldowns), so the whole defense deals at most `DPS_max` damage per second. Now bound how long one ship can stay on the field. The slowest ship class moves at 0.18 x 90 = 16.2 units per second times `v(w) >= 1`; the strongest ship slow in the game is 0.25 (Frost Titan), and slows do not stack (the strongest applies); a freeze on a ship is only a 0.6 slow; stuns on ships last at most 1.5 s and a ship cannot be stunned again for `SHIP_STUN_IMMUNE = 1` s afterwards, so it moves at least 40% of the time; Gravity Well and tractor pulls have a per-enemy budget (at most 320 units for a ship) that children inherit, so a family can never be pulled back more than one budget's worth. A ship therefore crosses a channel of length `L` in at most `T_max = (L + 320) / (16.2 x 0.25 x 0.4)` seconds, a constant of the map. It absorbs at most `DPS_max x T_max` damage before it reaches the Core. Once the spawn cap binds, every hull in wave `w` is multiplied by `H(w)`, and `H(w) -> infinity` because `B(w)` grows without bound while the unmultiplied capacity of 300 spawns is fixed. So there is a wave where a single Worldbreaker hull (20,000 x `H(w)`) exceeds `DPS_max x T_max`; it leaks, its remaining mass is larger than any Core Integrity (at most 200), and the run ends. Storm Titans end it sooner.
 
-**Checked by** the bot sweep (section 4): no run, uncapped, clears wave 160, and every wave finishes inside the headless wave timeout (600 simulated seconds). Before the ship stun immunity, stacked stuns could hold a Storm Titan still for most of a wave and stall it past that timeout.
+**Checked by** the bot sweep (section 4): no run, uncapped, clears wave 160, and every wave finishes inside the headless wave timeout (600 simulated seconds). Before the ship stun immunity, stacked stuns could hold a Storm Titan still for most of a wave and stall it past that timeout. As an upper bound on any economy, a solid bot given 1e12 credits and a demand factor of 6 instead of 2.6, so it builds more than twice the defense it thinks it needs (out/exploits/overbuild.mjs), spent 3.5M to 4.7M credits on 290 to 410 towers per map and still ended on waves 108 to 111: past the surge, no amount of income buys more than a few waves.
 
 ### 3.5 Upgrades are worth buying
 
@@ -165,18 +166,18 @@ Supply drops: 200 per Supply Drop Rail, 750 for the one Quartermaster; at most 6
 <!-- gen:bench -->
 | Tower | Kind | Pass | T0 | T1 | T2 | T3 | T4 | T5 | Mean eta by tier |
 |---|---|---|---|---|---|---|---|---|---|
-| Pulse Turret | damage | 20/25 | 1/1 | 2/3 | 1/3 | 3/3 | 6/6 | 7/9 | 10.0, 7.6, 7.2, 9.4, 13.0, 23.8 |
-| Scatter Pod | damage | 23/25 | 1/1 | 2/3 | 3/3 | 2/3 | 6/6 | 9/9 | 11.9, 7.9, 9.9, 11.6, 15.2, 24.6 |
-| Rail Sniper | damage | 22/25 | 0/1 | 2/3 | 3/3 | 3/3 | 6/6 | 8/9 | 13.6, 13.4, 13.0, 16.0, 15.3, 28.9 |
-| Missile Pod | damage | 22/25 | 1/1 | 2/3 | 2/3 | 3/3 | 6/6 | 8/9 | 9.8, 8.3, 9.7, 12.1, 12.6, 22.6 |
+| Pulse Turret | damage | 24/25 | 1/1 | 3/3 | 2/3 | 3/3 | 6/6 | 9/9 | 10.2, 8.3, 7.6, 9.7, 12.8, 24.9 |
+| Scatter Pod | damage | 25/25 | 1/1 | 3/3 | 3/3 | 3/3 | 6/6 | 9/9 | 10.7, 8.1, 9.5, 11.8, 15.2, 25.2 |
+| Rail Sniper | damage | 25/25 | 1/1 | 3/3 | 3/3 | 3/3 | 6/6 | 9/9 | 12.9, 13.0, 11.4, 13.6, 14.9, 27.3 |
+| Missile Pod | damage | 24/25 | 1/1 | 3/3 | 3/3 | 3/3 | 6/6 | 8/9 | 9.9, 8.7, 10.6, 11.7, 12.2, 23.3 |
 | Cryo Emitter | utility | 25/25 |  |  |  |  |  |  |  |
-| Tesla Coil | damage | 25/25 | 1/1 | 3/3 | 3/3 | 3/3 | 6/6 | 9/9 | 7.8, 9.0, 11.1, 12.3, 17.1, 24.6 |
-| Laser Array | damage | 25/25 | 1/1 | 3/3 | 3/3 | 3/3 | 6/6 | 9/9 | 11.1, 10.5, 10.0, 13.0, 15.7, 23.9 |
-| Drone Bay | damage | 21/25 | 1/1 | 3/3 | 2/3 | 2/3 | 6/6 | 7/9 | 8.8, 9.1, 7.2, 10.8, 15.2, 22.8 |
-| Orbital Mortar | damage | 22/25 | 1/1 | 3/3 | 3/3 | 3/3 | 6/6 | 6/9 | 8.5, 9.4, 11.4, 11.9, 13.3, 17.3 |
+| Tesla Coil | damage | 25/25 | 1/1 | 3/3 | 3/3 | 3/3 | 6/6 | 9/9 | 8.4, 10.3, 11.0, 13.1, 17.0, 26.2 |
+| Laser Array | damage | 25/25 | 1/1 | 3/3 | 3/3 | 3/3 | 6/6 | 9/9 | 11.2, 10.3, 10.6, 13.2, 15.9, 25.3 |
+| Drone Bay | damage | 22/25 | 1/1 | 3/3 | 2/3 | 3/3 | 6/6 | 7/9 | 9.3, 9.0, 7.0, 10.6, 14.7, 22.7 |
+| Orbital Mortar | damage | 22/25 | 1/1 | 3/3 | 3/3 | 3/3 | 6/6 | 6/9 | 8.2, 9.3, 12.1, 12.2, 13.3, 17.9 |
 | Gravity Well | utility | 25/25 |  |  |  |  |  |  |  |
 | Mining Rig | income | 25/25 |  |  |  |  |  |  |  |
-| Command Beacon | support | 12/25 |  |  |  |  |  |  |  |
+| Command Beacon | support | 25/25 |  |  |  |  |  |  |  |
 
 Targets by tier: 10.0, 10.5, 11.2, 13.0, 16.0, 25.0 (+-35%). Utility, support and income rows count configs that meet their own contract (section 4 of docs/BENCH.md).
 <!-- /gen:bench -->
@@ -189,9 +190,10 @@ Configs that read LOW are reported but not violations: Tractor detection and con
 <!-- gen:checks -->
 | Check | Result |
 |---|---|
-| No arbitrage (random play) | 6 runs, 1628 commands, 122907 ticks, 77 ability uses; worst rise of credits + assets above income 0.0e+0 |
+| No arbitrage (random play) | 16 runs, 7749 commands, 526344 ticks, 230 ability uses; worst rise of credits + assets above income 1.3e-9 |
+| Bounty conservation | 18 waves with abilities, nanite regrowth and Maw volleys: 683470 paid pops, never more than the 706914 shells the storm sent |
 | Threat bands | authored waves within 16.8% of B(w), procedural within 1.00% |
-| Violations | [threat] B(525) = Infinity is not above B(524) = 4.787800027998677e+307; [threat] B(526) = Infinity is not above B(525) = Infinity; [threat] B(527) = Infinity is not above B(526) = Infinity; [threat] B(528) = Infinity is not above B(527) = Infinity; [threat] B(529) = Infinity is not above B(528) = Infinity; [threat] B(530) = Infinity is not above B(529) = Infinity; [threat] B(531) = Infinity is not above B(530) = Infinity; [threat] B(532) = Infinity is not above B(531) = Infinity; [threat] B(533) = Infinity is not above B(532) = Infinity; [threat] B(534) = Infinity is not above B(533) = Infinity; [threat] B(535) = Infinity is not above B(534) = Infinity; [threat] B(536) = Infinity is not above B(535) = Infinity; [bench] rail 0-0-0 reads HIGH (13.6 vs target 10.0 on SHIP/global); [bench] rail 1-0-0 reads HIGH (14.3 vs target 10.5 on SHIP/global); [bench] rail 5-0-2 reads HIGH (38.0 vs target 25.0 on SHIP/global); [bench] beacon: 13 configs would not pay for themselves on 4 equal towers |
+| Violations | [sweep] dock: eco median 99 more than 2 waves below solid median 105; [sweep] eco pooled median 99 below solid pooled median 101; [sweep] crater: rail holds 51% of the solid bot's credits (dominant tower); [sweep] frost: rail holds 51% of the solid bot's credits (dominant tower) |
 <!-- /gen:checks -->
 
 ## 4. Skill expression: the bot sweep
@@ -202,7 +204,7 @@ Three bots play every map with several seeds, uncapped (docs/ECONOMY.md 7):
 - **solid** buys the purchase with the best marginal defensive value per credit (new towers, upgrades, Beacons, slowing fields), saves for big upgrades and fires abilities;
 - **eco** is solid plus Mining Rigs early and vault withdrawals.
 
-Solid also runs with each Commander. Targets: novice loses between waves 25 and 55; solid reaches 70 to 110; eco at least as far as solid; nobody past 160; Cadet >= Pilot >= Veteran >= Nightmare.
+Solid also runs with each Commander. Targets: novice loses between waves 25 and 55; solid reaches 70 to 110; eco at least as far as solid (strictly on the median pooled over all maps, and within 2 waves on each map, since one seed moves a five-seed median by a whole surge wave); nobody past 160; Cadet >= Pilot >= Veteran >= Nightmare.
 
 ![Survival waves per bot per map](balance/survival.svg)
 
@@ -210,22 +212,27 @@ Solid also runs with each Commander. Targets: novice loses between waves 25 and 
 <!-- gen:survival -->
 | Bot | Crater Basin | Frostline | Orbital Dock | Ember Rift | Prism Fields | All |
 |---|---|---|---|---|---|---|
-| novice | 42 (42, 42, 42) | 26 (26, 33) | 22 (22, 27) | 19 (19, 42) | 28 (28, 33) | 33 |
-| solid | 99 (99, 104) | 104 (104, 106) | 106 (106, 106) | 99 (99) | 106 (106) | 104 |
-| solid+brick | 99 (99, 104) | 99 (99, 99) | 105 (105, 106) | 99 (99) | - | 99 |
-| solid+nova | 99 (99) | 105 (105) | 105 (105, 106) | 99 (99) | - | 105 |
-| solid+vega | 104 (104) | - | 105 (105, 106) | 99 (99) | 108 (108) | 105 |
-| eco | 99 (99, 99) | 99 (99) | 99 (99, 105) | 104 (104) | 108 (108) | 99 |
+| novice | 42 (40, 42, 42, 42, 42) | 33 (26, 26, 33, 38, 42) | 27 (22, 24, 27, 42, 42) | 42 (19, 28, 42, 42, 42) | 40 (23, 28, 40, 42, 42) | 40 |
+| solid | 99 (99, 99, 99, 104, 105) | 96 (96, 96, 96, 105, 105) | 105 (99, 99, 105, 105, 105) | 99 (99, 99, 99, 99, 101) | 106 (105, 106, 106, 108, 108) | 101 |
+| solid+brick | 99 (96, 99, 99, 99, 99) | 99 (94, 99, 99, 99, 105) | 105 (99, 104, 105, 105, 105) | 99 (96, 99, 99, 103, 105) | 108 (108, 108, 108, 108, 108) | 99 |
+| solid+nova | 105 (99, 105, 105, 106, 106) | 106 (106, 106, 106, 106, 106) | 99 (99, 99, 99, 99, 106) | 99 (99, 99, 99, 99, 99) | 108 (108, 108, 108, 108, 109) | 106 |
+| solid+vega | 104 (99, 99, 104, 104, 104) | 106 (106, 106, 106, 106, 106) | 103 (99, 99, 103, 105, 106) | 99 (99, 99, 99, 99, 99) | 107 (106, 107, 107, 108, 109) | 104 |
+| eco | 99 (99, 99, 99, 105, 105) | 105 (99, 99, 105, 105, 106) | 99 (99, 99, 99, 99, 106) | 99 (96, 99, 99, 99, 104) | 108 (107, 108, 108, 108, 109) | 99 |
 
-Median wave cleared (every seed in brackets). 43 runs; the furthest cleared wave 108; 10 of 32 solid and eco runs ended on a Storm Titan leak, the rest on Core Integrity.
+Median wave cleared (every seed in brackets). 186 runs; the furthest cleared wave 109; 42 of 125 solid and eco runs ended on a Storm Titan leak, the rest on Core Integrity.
 <!-- /gen:survival -->
 
 ### Difficulty (generated)
 <!-- gen:difficulty -->
-_(no difficulty runs in the sweep)_
+| Bot | Cadet | Pilot | Veteran | Nightmare |
+|---|---|---|---|---|
+| novice | 42 (25, 40, 42, 42, 42, 42) | 27 (22, 24, 27, 40, 42, 42) | 24 (19, 22, 24, 32, 42, 42) | 11 (3, 3, 11, 13, 13, 13) |
+| solid | 106 (104, 105, 106, 106, 106, 107) | 99 (99, 99, 99, 105, 105, 105) | 99 (99, 99, 99, 99, 99, 99) | 4 (2, 2, 4, 99, 99, 99) |
+
+Pooled over Crater Basin and Orbital Dock, seeds 1, 2, 3.
 <!-- /gen:difficulty -->
 
-Nightmare has one point of Core Integrity, so the first leak of any size ends the run; the bots build with extra headroom there (a careful player would), and the result depends mostly on whether the opening holds without a single leak.
+Nightmare has one point of Core Integrity, so the first leak of any size ends the run, and the result is bimodal: the solid bot either holds its opening without a single leak and then plays a normal game to wave 99 (Orbital Dock, every seed), or one stray shard slips past its first two towers and the run ends on wave 2 to 4 (Crater Basin, every seed). The bot builds with extra headroom on a one-life run, as a careful player would; more headroom only delays its first purchases and loses sooner, so the Crater Basin result is a limit of the bot's placement model rather than of the economy (the same opening never leaks on Cadet, Pilot or Veteran, where a leak is visible as lost Integrity rather than a loss).
 
 ### Late-game tower mix (generated)
 The solid bot's final defense, as the share of credits invested per tower type. No type may hold more than half.
@@ -233,12 +240,14 @@ The solid bot's final defense, as the share of credits invested per tower type. 
 <!-- gen:mix -->
 | Map | Towers at the end (median) | Share of credits invested, by tower (median over seeds) |
 |---|---|---|
-| Crater Basin | 104 | Rail Sniper 46%, Laser Array 10%, Tesla Coil 8%, Orbital Mortar 7%, Command Beacon 5%, Pulse Turret 5%, Drone Bay 3%, Scatter Pod 2% |
-| Frostline | 100 | Rail Sniper 47%, Laser Array 13%, Command Beacon 11%, Pulse Turret 8%, Tesla Coil 5%, Orbital Mortar 3%, Scatter Pod 2%, Drone Bay 1%, Gravity Well 1% |
-| Orbital Dock | 102 | Rail Sniper 45%, Pulse Turret 11%, Command Beacon 10%, Orbital Mortar 8%, Laser Array 8%, Tesla Coil 7%, Scatter Pod 3%, Gravity Well 1%, Drone Bay 1% |
-| Ember Rift | 113 | Rail Sniper 52%, Pulse Turret 12%, Tesla Coil 12%, Laser Array 10%, Orbital Mortar 5%, Scatter Pod 3%, Command Beacon 2%, Gravity Well 2%, Cryo Emitter 1% |
-| Prism Fields | 130 | Rail Sniper 46%, Pulse Turret 12%, Laser Array 10%, Drone Bay 8%, Command Beacon 6%, Tesla Coil 6%, Cryo Emitter 4%, Scatter Pod 4%, Orbital Mortar 3%, Gravity Well 2% |
+| Crater Basin | 108 | Rail Sniper 51%, Orbital Mortar 11%, Tesla Coil 9%, Command Beacon 9%, Pulse Turret 6%, Laser Array 5%, Scatter Pod 4%, Drone Bay 3%, Gravity Well 1% |
+| Frostline | 90 | Rail Sniper 51%, Pulse Turret 15%, Laser Array 11%, Tesla Coil 9%, Command Beacon 5%, Drone Bay 4%, Scatter Pod 2% |
+| Orbital Dock | 90 | Rail Sniper 40%, Pulse Turret 16%, Command Beacon 10%, Laser Array 10%, Drone Bay 8%, Tesla Coil 8%, Scatter Pod 5%, Gravity Well 1% |
+| Ember Rift | 110 | Rail Sniper 48%, Laser Array 13%, Pulse Turret 10%, Tesla Coil 9%, Command Beacon 7%, Scatter Pod 3%, Gravity Well 2%, Cryo Emitter 1% |
+| Prism Fields | 105 | Rail Sniper 42%, Pulse Turret 11%, Drone Bay 11%, Command Beacon 10%, Laser Array 9%, Tesla Coil 6%, Cryo Emitter 4%, Scatter Pod 3%, Orbital Mortar 3%, Gravity Well 2% |
 <!-- /gen:mix -->
+
+**Open: two sweep targets fail on the current code.** Rail Sniper holds 51% on Crater Basin and Frostline (the limit is 50%), and eco trails solid by one pooled wave (99 vs 101) and by six on Orbital Dock. The last change to the engine only stopped children from getting a fresh Undertow and tractor budget (section 5), yet it changed the result of 63 of the 186 runs by up to 12 waves either way (a Gravity Well pull reaches the bots' RNG and placement, and from there everything). Before it, the same targets held with Rail at 46 to 48% and eco equal to solid. Strong runs cluster on waves 99 and 105 (either side of the wave 100 Aegis), so one seed moves a five-seed median by six waves. Rail trims were tried and did not help: a Siege Rail at 9,400 credits left Rail at 51% (a price rise also raises Rail's share of credits whenever the bot keeps buying them); Siege Rail ship damage 140 gave 51% and 49%; Supply Drop damage +10 gave 54% and 46%; ship damage 130 turns the Siege Rail LOW on the bench. A fix needs either a larger Rail change or more seeds per map. That is a balance decision left open.
 
 ## 5. What this balance pass changed, and why
 
@@ -247,13 +256,16 @@ The solid bot's final defense, as the share of credits invested per tower type. 
 | Ember Rift ended every bot run before wave 25 | two separate lanes split a young defense in half from wave 1 | longer lanes, the east lane opens gradually (waves 10 to 20), spawns 40% slower up to wave 35 (docs/ECONOMY.md 4.7) |
 | The wave 50 Specter ended runs on one leak (816 Integrity) | full-size debut of a Phantom ship immune to KINETIC and BLAST | a scout debut: empty hold, 80 HP hull, 80 Integrity if it leaks, with a warning on wave 49 and a tip naming the counter; slower (2.2) |
 | Novices died at the first Iron wave | eight Iron at once on wave 16 | two Iron on wave 16 (22 Integrity if both leak), Iron ramps from wave 17 |
-| Strong play reached waves 139 to 154 | late income and tower power outgrew the old surge | `c(w)` falls as `w^-3`, the surge starts at wave 65 and is steeper, a ship stops a penetrating Rail slug, Siege Rail deals 150 to ships (was 200) |
+| Strong play reached waves 139 to 154 | late income and tower power outgrew the old surge | `c(w)` falls as `w^-3`, the surge starts at wave 65 and is steeper, a ship stops a penetrating Rail slug, Siege Rail deals 150 to ships (was 220) |
 | Every strong run then died on the wave 100 Titan | the Titan hull tracked the full surge (1.57 x B(100) in one target) | the Titan follows the square root of the surge; it is a check some defenses fail, not a wall |
-| Rails held over half of every late defense | global range applies ship damage over the whole channel, and a slug went through a whole stack of ships | the ship stop, the Siege Rail trim, and bench grading of global towers at 0.7 x target on SHIP |
+| Rails held over half of every late defense | global range applies ship damage over the whole channel, and a slug went through a whole stack of ships | the ship stop, the Siege Rail trim (150 ship damage, price 6000 to 8600), and bench grading of global towers at 0.7 x target on SHIP |
 | Vault interest was not scaled by `c(w)` | engine | interest is `min(balance, cap) x rate x c(w)` |
 | Massed stuns stalled Titans past the wave timeout | no diminishing returns on ship stuns | 1 s stun immunity after a ship stun, stuns never extend a running one |
 | Titans took full-strength slows | engine | slows are half as strong on Titans, like stuns; descriptions say so |
-| Nightmare bots died on wave 2 to 4 | a 1-life run cannot learn from its first leak | the bots add headroom when Core Integrity is tiny (tools/headless.mjs); the economy is unchanged |
+| A nanite family could be farmed for bounty | every regrown shell paid bounty again, so a hold plus a slow popper doubled the family and its pay every cycle (out/exploits/regrow_mechanism.mjs: 2,979x a family's bounty in 60 s) | regrown shells share the bounty of the shell that regrew (docs/ECONOMY.md 1.1) |
+| A slowed Maw paid for every volley | each volley of a stalled Maw paid in full | the Maw pays for one full-speed crossing of volleys; a stalled Maw pays no more than one that walks the channel (out/exploits/maw_farm.mjs) |
+| Undertow could hold a nanite family forever | children spawned with a fresh pull budget, so pop, regrow, pop refreshed it every generation; with six Rewind Fields the family grew past 1,000 meteors and the wave never ended (out/exploits/undertow_stall.mjs) | children inherit the pull and tractor budgets their parent used |
+| Nightmare bots died on wave 2 to 4 | a 1-life run cannot learn from its first leak | the bots add headroom when Core Integrity is tiny and do not save up during a one-life opening (tools/headless.mjs); the economy is unchanged. Orbital Dock now reaches wave 99 on Nightmare; Crater Basin still ends on one early leak (section 4) |
 
 Tower-level tuning (prices, damage, descriptions) was done per tower before this pass; docs/BENCH.md 7 has the current bench table.
 

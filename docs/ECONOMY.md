@@ -19,6 +19,12 @@ Because a multi-HP shell (Obsidian, ship hulls) pays one bounty regardless of it
 
 Credits are stored as a float; the HUD shows `floor(credits)`. Purchases require `credits >= price`.
 
+**Bounty conservation.** Bounty is paid once per shell the storm sent, never for shells created on the field. Two things create shells there, and both are capped (`e.owed` in `src/sim/enemies.js`):
+- **Nanite regrowth.** A regrown shell and every child it later splits into share the bounty of the shells it had before it regrew. A family that is popped, left alone for 3 s and popped again keeps growing, but it never pays more than it was worth when it arrived.
+- **The Maw's volleys.** The Maw pays for as many volleys as it spits crossing its channel once at full speed (`ceil(crossing time / 3.2 s)`, counted from where it appears). Volleys past that (a slowed or stalled Maw) pay nothing.
+
+An unpaid shell also gives no Refinery bonus and no Commander XP. So every wave pays bounty for at most the shells in its groups, its Titan and the Maw's paid volleys, whatever the defense does.
+
 ### 1.2 Wave bonus
 When a wave is cleared (all of its spawns released and every enemy belonging to it destroyed or leaked): `+ (200 + w)` credits. Not scaled by c(w). It matters most in the first twenty waves, where it funds the second and third tower; by wave 30 pops pay more than the bonus.
 
@@ -170,7 +176,7 @@ TITAN_K = 0.7, TITAN_SURGE_EXP = 0.5
 
 Before the surge the Titan tracks the threat budget of its own wave, so every early Titan is the same kind of single-target check relative to the economy the player has at that point, and the sqrt(tier) factor makes each one a little stiffer than the last. Once the surge starts, the Titan follows only the square root of it: the surge is flood pressure, spread over hundreds of spawns that area damage handles, while a Titan is one target. With the full surge (the previous rule) the wave 100 Aegis was 1.57 x B(100) of single-target hull and ended every strong run on that one wave; now it is a real check that some defenses fail and the flood decides the rest (docs/BALANCE.md 4). The hull multiplier H is already inside B(w), so it is not applied again.
 
-Titans resist crowd control like every ship: slows are half as strong on a Titan, stuns last half as long, and a ship cannot be stunned again for 1 s after a stun ends (`SHIP_STUN_IMMUNE`), so stacked stunners hold a ship still for at most `stun / (stun + 1 s)` of the time and every wave ends.
+Titans resist crowd control like every ship: slows are half as strong on a Titan, stuns last half as long, and a ship cannot be stunned again for 1 s after a stun ends (`SHIP_STUN_IMMUNE`), so stacked stunners hold a ship still for at most `stun / (stun + 1 s)` of the time and every wave ends. Pulling an enemy back along the channel (Gravity Well Undertow, Drone Bay tractors) spends a per-enemy budget that children inherit from their parent, so no pop-and-regrow cycle can refresh it.
 
 ### 4.7 Early pacing
 Authored waves 1 to 15 are stretched in time without changing their mass: every `start` and `spacing` is multiplied by `earlyPace(w) = 1 + 0.6 x (16 - w) / 15` (1.6x at wave 1, 1x from wave 16). Early rounds keep their BTD-like mass but arrive at roughly BTD-like density, so an opening of two or three turrets can hold them.
@@ -193,14 +199,14 @@ Commander XP per wave cleared: `xp(w) = 40 + 12w`, plus 0.1 XP for every shell t
 The proofs are in docs/BALANCE.md 3; `node tools/balance.mjs` checks every claim and exits non-zero on a violation.
 
 1. **Termination.** The map has finite buildable area, so the number of towers is bounded and total damage output is bounded by a constant. Required damage grows without bound (B(w)/D(w) is super-exponential after wave 65, hulls grow with H once the spawn cap binds, the speed ramps, and ships cannot be held still by stuns). Therefore every run ends. Checked: no bot survives past wave 160 (uncapped runs).
-2. **No arbitrage.** Refunds <= paid, a used Beacon discount spends the Beacon's undo refund, discounts excluded from Rigs and Beacons, no interest above caps, abilities never pay credits directly. Checked: property tests that try buy/sell/undo loops, discount loops, Rig and vault loops, save/load and every activated ability under three timing policies, and assert credits plus asset value never rise above what the storm paid in.
+2. **No arbitrage.** Refunds <= paid, a used Beacon discount spends the Beacon's undo refund, discounts excluded from Rigs and Beacons, no interest above caps, abilities never pay credits directly, and bounty is paid once per shell the storm sent (1.1). Checked: property tests that try buy/sell/undo loops, discount loops, Rig and vault loops, save/load and every activated ability under three timing policies, and assert credits plus asset value never rise above what the storm paid in; the same ability runs assert that no wave pays bounty for more shells than it sent (nanite regrowth and Maw volleys included).
 3. **Bounded passive income.** Rig cap, vault caps, supply drop counts, everything times c(w). Checked: maximum theoretical passive income per wave for waves 1 to 160, and an engine payout check against it.
 4. **Monotone threat.** B(w+1) > B(w) for all w >= 1 (checked to wave 600), log-convex from the surge start to SURGE_CAP, authored waves inside +-20% and procedural waves inside +-5%, Titan hulls increasing. Checked by the balance report.
 5. **Upgrades are worth buying.** Efficiency rises with tier per section 3.2. Checked by the bench table (pass rate by tower and tier; no config HIGH).
 6. **Skill expression.** On every map, Pilot, several seeds, with and without a Commander (medians):
    - Novice bot (buys cheap towers, random legal spots, never upgrades past tier 2) loses between waves 25 and 55.
    - Solid bot (greedy best-efficiency purchases near the path, upgrades toward tier 4 and 5) reaches waves 70 to 110 (with a Commander: up to 130).
-   - Eco bot (Solid bot plus Mining Rigs early) reaches at least as far as Solid.
+   - Eco bot (Solid bot plus Mining Rigs early) reaches at least as far as Solid: strictly on the median pooled over all maps, and within 2 waves of it on each map (seed noise; `TARGETS.ecoTol` in tools/balance.mjs).
    - No bot passes wave 160.
    - Difficulty orders the results: Cadet >= Pilot >= Veteran >= Nightmare.
    - No tower type holds more than half of the solid bot's credits at the end of a run.

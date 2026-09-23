@@ -213,7 +213,7 @@ and fails on any HIGH; docs/BALANCE.md 3.5 charts efficiency by tier.
 |---|---|---|---|---|---|
 | Pulse Turret | 24 | 1 | 0 | 5-2-0: 30.4 vs 25 (DENSE) | 0-0-2 (7.0 vs 7.3 floor) is the detection step of Marksman; Marksman T3+ is graded on SHIP, Starlance on DENSE |
 | Scatter Pod | 25 | 0 | 0 | 5-0-0: 30.8 vs 25 (SWARM) | Solar Flare graded on SHIP |
-| Rail Sniper | 25 | 0 | 0 | 5-0-2: 33.4 vs 25 (SHIP, global) | SHIP graded at 0.7 x target for global range (section 3); a ship hull stops a penetrating slug in real waves |
+| Rail Sniper | 25 | 0 | 0 | 5-0-2: 32.8 vs 25 (SHIP, global) | SHIP graded at 0.7 x target for global range (section 3); a ship hull stops a penetrating slug in real waves |
 | Missile Pod | 24 | 1 | 0 | 0-2-0: 13.5 vs 11.2 (DENSE) | 5-0-2 reads 16.0 on SWARM4X (0.64); Hunter-Killer graded on SHIP |
 | Tesla Coil | 25 | 0 | 0 | 0-2-5: 33.3 vs 25 (SHIP) | Overload graded on SHIP |
 | Laser Array | 25 | 0 | 0 | 0-0-2: 13.4 vs 11.2 (DENSE) | |

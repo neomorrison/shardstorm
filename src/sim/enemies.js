@@ -27,7 +27,7 @@ export const MAW_SPIT_EVERY = 3.2;
 // for at most stun / (stun + SHIP_STUN_IMMUNE) of the time, so massed stunners cannot stall a
 // wave forever (docs/BALANCE.md, termination).
 export const SHIP_STUN_IMMUNE = 1.0;
-const MAW_SPIT_TYPES = ['rose', 'iron', 'geode', 'aurora', 'obsidian'];
+export const MAW_SPIT_TYPES = ['rose', 'iron', 'geode', 'aurora', 'obsidian'];
 
 export const TITAN_KINDS = {
   maw:   { name: 'The Maw',   title: 'Storm Titan', trait: 'Spits meteors behind itself.', color: '#ff5d73' },
@@ -334,6 +334,12 @@ export function spawnChildren(sim, e, projId = -1) {
       });
       if (projId >= 0) kid.immuneProj = projId;
       if (owed >= 0) { kid.owed = Math.min(owed, cdef.shells); owed -= kid.owed; }
+      // displacement budgets (Undertow `gRew`, tractor `_towed`) belong to the family: children
+      // start with what their parent already used, so a nanite family that pops and regrows
+      // cannot refresh its budget every generation and be held forever
+      // (out/exploits/undertow_stall.mjs)
+      if (e.gRew) kid.gRew = e.gRew;
+      if (e._towed) kid._towed = e._towed;
       // inherit statuses (not freeze or stun)
       if (e.slowT > 0) { kid.slowMult = e.slowMult; kid.slowT = e.slowT; }
       if (e.exposedT > 0) { kid.exposedT = e.exposedT; kid.exposeMult = e.exposeMult; }

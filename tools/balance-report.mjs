@@ -23,7 +23,7 @@ import { TOWERS } from '../src/data/towers/index.js';
 import { MAP_ORDER, MAPS } from '../src/data/maps.js';
 import {
   budget, incomeFactor, waveBonus, titanHp, spawnDuration, speedRamp, START_CASH, C_START, C_EXP,
-  K_SURGE, SURGE_START, TITAN_K, TITAN_EVERY, TITAN_SURGE_EXP, ETA0, TIER_EFFICIENCY, EFFICIENCY_TOLERANCE, GLOBAL_SHIP_FACTOR,
+  K_SURGE, SURGE_START, SURGE_CAP, TITAN_K, TITAN_EVERY, TITAN_SURGE_EXP, ETA0, TIER_EFFICIENCY, EFFICIENCY_TOLERANCE, GLOBAL_SHIP_FACTOR,
 } from '../src/data/economy.js';
 import { SCOUT_HULL } from '../src/data/enemies.js';
 
@@ -134,7 +134,8 @@ function threatChart() {
   const lastY = [];
   for (const s of series) {
     const pts = econ.map((e) => `${X(e.w).toFixed(1)},${Y(s.get(e)).toFixed(1)}`).join(' ');
-    b += `<polyline class="${s.cls}" fill="none" stroke-width="2" stroke-linejoin="round" points="${pts}"/>`;
+    // the passive bound is a ceiling, not a measured flow: dashed, so it never reads as a twin of cumulative income
+    b += `<polyline class="${s.cls}" fill="none" stroke-width="2" stroke-linejoin="round"${s.key === 'pas' ? ' stroke-dasharray="6 4"' : ''} points="${pts}"/>`;
     // hover targets every 5 waves
     for (const e of econ) if (e.w === 1 || e.w % 5 === 0) b += `<circle class="hit" cx="${X(e.w).toFixed(1)}" cy="${Y(s.get(e)).toFixed(1)}" r="6"><title>${esc(`${s.name}, wave ${e.w}: ${fmt(s.get(e))}`)}</title></circle>`;
     lastY.push({ s, y: Y(s.get(econ[econ.length - 1])) });
@@ -255,7 +256,7 @@ T.constants = () => [
   `| Starting credits | ${START_CASH} | ECONOMY 1.4 |`,
   `| c(w) | 1 up to wave ${C_START}, then (${C_START}/w)^${C_EXP} | ECONOMY 1.1 |`,
   `| Wave bonus | ${waveBonus(0)} + w | ECONOMY 1.2 |`,
-  `| Surge | exp(${K_SURGE} x max(0, w - ${SURGE_START})^2) | ECONOMY 4.1 |`,
+  `| Surge | exp(${K_SURGE} x max(0, w - ${SURGE_START})^2) up to wave ${SURGE_START + SURGE_CAP}, then along its tangent (finite numbers only) | ECONOMY 4.1 |`,
   `| Titan hull | ${TITAN_K} x sqrt(tier) x B(w) / S(w)^${(1 - TITAN_SURGE_EXP).toFixed(1)}, w = ${TITAN_EVERY} x tier | ECONOMY 4.6 |`,
   `| Global-range SHIP grading | ${GLOBAL_SHIP_FACTOR} x target | ECONOMY 3.2 |`,
   `| Specter scout hull | ${SCOUT_HULL} x hull, empty hold | ECONOMY 4.8 |`,
@@ -343,6 +344,7 @@ T.checks = () => {
   const a = report.sections.arbitrage, th = report.sections.threat;
   const out = ['| Check | Result |', '|---|---|'];
   if (a) out.push(`| No arbitrage (random play) | ${a.trials} runs, ${a.commands} commands, ${a.steps} ticks, ${a.abilities} ability uses; worst rise of credits + assets above income ${Number(a.worst).toExponential(1)} |`);
+  if (a && a.popWaves) out.push(`| Bounty conservation | ${a.popWaves} waves with abilities, nanite regrowth and Maw volleys: ${a.popsPaid} paid pops, never more than the ${a.popsBound} shells the storm sent |`);
   if (th) out.push(`| Threat bands | authored waves within ${(th.authoredMax * 100).toFixed(1)}% of B(w), procedural within ${(th.procMax * 100).toFixed(2)}% |`);
   out.push(`| Violations | ${report.violations && report.violations.length ? report.violations.map(esc).join('; ') : 'none'} |`);
   return out.join('\n');

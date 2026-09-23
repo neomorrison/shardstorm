@@ -58,7 +58,7 @@ export const TITAN_EVERY = 20;
 // square root of the surge, times a factor that grows with the square root of the tier. The
 // surge is flood pressure; the Titan rises with it more slowly, so it stays a single-target
 // check that a prepared defense can pass instead of a wall that ends every run on one wave
-// (wave 20: about 410 HP, wave 40: 2.8k, wave 60: 12.8k, wave 80: 73k, wave 100: 1.33M).
+// (wave 20: about 410 HP, wave 40: 2.8k, wave 60: 12.8k, wave 80: 73k, wave 100: 1.32M).
 // The hull multiplier H only exists inside budget(w), so it is not applied again.
 export const TITAN_K = 0.7;
 export const TITAN_SURGE_EXP = 0.5;

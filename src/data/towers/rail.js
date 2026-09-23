@@ -106,8 +106,7 @@ export default {
       ],
     },
     {
-      
-name: 'Logistics',
+      name: 'Logistics',
       upgrades: [
         { name: 'Fast Cycling', cost: 200, desc: 'Fires 10% faster and slugs deal 2 more damage.',
           apply(s) { const a = main(s); a.cooldown /= 1.1; a.damage += 2; } },

@@ -37,6 +37,7 @@ import { TOWERS, TOWER_LIST, NO_DISCOUNT } from '../src/data/towers/index.js';
 import { HEROES } from '../src/data/heroes.js';
 import { MAPS, MAP_ORDER } from '../src/data/maps.js';
 import { ENEMIES } from '../src/data/enemies.js';
+import { MAW_SPIT_TYPES } from '../src/sim/enemies.js';
 import {
   budget, incomeFactor, waveBonus, titanHp, speedRamp, spawnDuration, priceFor, RIG_CAP, SELL_RATE,
   SURGE_START, SURGE_CAP, TITAN_EVERY, ETA0, TIER_EFFICIENCY, EFFICIENCY_TOLERANCE, START_CASH,
@@ -109,7 +110,7 @@ function violate(section, msg) { violations.push(`[${section}] ${msg}`); console
 function header(t) { console.log('\n' + '='.repeat(96) + '\n' + t + '\n' + '='.repeat(96)); }
 const pad = (s, n) => { s = String(s); return s.length >= n ? s : s + ' '.repeat(n - s.length); };
 const padL = (s, n) => { s = String(s); return s.length >= n ? s : ' '.repeat(n - s.length) + s; };
-const fmtK = (x) => (x >= 1e9 ? (x / 1e9).toFixed(2) + 'G' : x >= 1e6 ? (x / 1e6).toFixed(2) + 'M' : x >= 1e4 ? (x / 1e3).toFixed(1) + 'k' : x >= 100 ? x.toFixed(0) : x.toFixed(2));
+const fmtK = (x) => (x >= 1e12 ? x.toExponential(2).replace('e+', 'e') : x >= 1e9 ? (x / 1e9).toFixed(2) + 'G' : x >= 1e6 ? (x / 1e6).toFixed(2) + 'M' : x >= 1e4 ? (x / 1e3).toFixed(1) + 'k' : x >= 100 ? x.toFixed(0) : x.toFixed(2));
 const median = (a) => { const b = a.slice().sort((x, y) => x - y); return b.length ? b[(b.length - 1) >> 1] : NaN; };
 
 // ============================================================================================
@@ -137,10 +138,14 @@ class Ledger {
   check(what) {
     this.events();
     this.checks++;
-    const d = wealth(this.sim) - this.income();
+    const inc = this.income(), wl = wealth(this.sim);
+    const d = wl - inc;
     const gain = d - this.base;
     if (gain > this.worst) this.worst = gain;
-    if (gain > 1e-6) return `${what}: credits + assets rose by ${gain.toFixed(4)} above income`;
+    // float round-off only: credits and sell values are floats summed over thousands of
+    // fractional bounties, so the tolerance is 1e-10 of the amounts involved with a 1e-6 floor
+    // (a real loop gains whole credits and repeats)
+    if (gain > 1e-6 + 1e-10 * (Math.abs(inc) + Math.abs(wl))) return `${what}: credits + assets rose by ${gain.toExponential(3)} above income (${inc.toFixed(2)} paid in, wealth ${wl.toFixed(2)})`;
     this.base = Math.min(this.base, d);
     return null;
   }
@@ -154,6 +159,41 @@ function legalSpots(sim, type, n, rng, near = 170) {
     if (c.spotOk && sim.nearestPathPoint(x, y).dist < near) out.push([x, y]);
   }
   return out;
+}
+
+// Bounty conservation: pop bounty is paid once per shell the storm sent (docs/ECONOMY.md 1.1).
+// Wraps the sim so every paid pop is counted by wave, and records how many Maw volleys each
+// Storm Titan may still get paid for when it appears. bound(w) is the most paid pops wave w can
+// produce: its groups' shells, its Titan, and the paid Maw volleys. Nanite regrowth and stalled
+// Maws must never push a wave above it (out/exploits/regrow_farm.mjs, maw_farm.mjs).
+class PopCounter {
+  constructor(sim) {
+    this.sim = sim; this.paid = new Map(); this.maw = new Map(); this.seen = new Set();
+    const orig = sim._onPop.bind(sim);
+    sim._onPop = (e, c, t) => { this.paid.set(e.wave, (this.paid.get(e.wave) || 0) + 1); orig(e, c, t); };
+  }
+  tick() {
+    for (const e of this.sim._titans) {
+      if (this.seen.has(e.id) || !e.titan) continue;
+      this.seen.add(e.id);
+      const T = e.titan;
+      if (T.kind !== 'maw') continue;
+      const type = MAW_SPIT_TYPES[Math.min(MAW_SPIT_TYPES.length - 1, T.tier - 1)];
+      const n = T.paidVolleys * Math.min(8, 2 + T.tier) * ENEMIES[type].shells;
+      this.maw.set(e.wave, (this.maw.get(e.wave) || 0) + n);
+    }
+  }
+  bound(w) {
+    const spec = buildWave(w, { lanes: this.sim.lanes });
+    let n = spec.titan ? 1 : 0;
+    for (const g of spec.groups) n += g.count * (g.mods && g.mods.scout ? 1 : ENEMIES[g.type].shells);
+    return n + (this.maw.get(w) || 0);
+  }
+  check(label) {
+    const out = [];
+    for (const [w, paid] of this.paid) { const b = this.bound(w); if (paid > b) out.push(`${label}: wave ${w} paid bounty for ${paid} shells, the storm sent ${b}`); }
+    return out;
+  }
 }
 
 function arbitrage(quick) {
@@ -264,7 +304,8 @@ function arbitrage(quick) {
   // 1f. ability timing: every activated ability in the game (tower tiers 4 and 5, Commanders at
   // level 20), fired at the first usable tick, at random ticks, or late in the wave, never lets
   // W - E rise. Abilities only destroy meteors (bounty is income) or buff towers.
-  let abilityUses = 0;
+  let abilityUses = 0, abilityWorst = 0, popsPaid = 0, popsBound = 0, popWaves = 0;
+  const popCounters = [];
   const abilityIds = new Set();
   {
     const cfgs = [];
@@ -276,6 +317,7 @@ function arbitrage(quick) {
       }
     }
     const policies = ['first', 'random', 'late'];
+    const ledgers = [];
     for (let trial = 0; trial < (quick ? 3 : 6); trial++) {
       const hero = ['vega', 'nova', 'brick'][trial % 3];
       const policy = policies[trial % 3];
@@ -298,12 +340,16 @@ function arbitrage(quick) {
       sim.skipTo(30 + trial * 12);
       sim.state.cash = 2e4 + trial * 1e4;
       const L = new Ledger(sim);
+      ledgers.push(L);
+      const PC = new PopCounter(sim);
+      popCounters.push([`ability trial ${trial}`, PC]);
       for (let wv = 0; wv < 3 && sim.state.phase !== 'over'; wv++) {
         sim.startWave();
         note(L.check(`ability trial ${trial} (${policy}): start wave`));
         let n = 0;
         while (sim.state.phase === 'wave' && n++ < 60 * 300) {
           sim.step();
+          PC.tick();
           const fire = policy === 'first' || (policy === 'random' && rng.next() < 0.02) || (policy === 'late' && n > 60 * 20);
           if (fire) for (const g of sim.abilityBar()) if (g.usable && sim.useAbility(g.id).ok) { abilityUses++; abilityIds.add(g.id); note(L.check(`ability trial ${trial} (${policy}): ${g.id}`)); }
           if ((n & 15) === 0) note(L.check(`ability trial ${trial} (${policy}) tick ${n}`));
@@ -311,10 +357,16 @@ function arbitrage(quick) {
         note(L.check(`ability trial ${trial} (${policy}) after wave ${sim.state.wave}`));
       }
     }
+    abilityWorst = Math.max(abilityWorst, ...ledgers.map((L) => L.worst));
     const want = new Set(cfgs.map((c) => c.id));
     const missing = [...want].filter((id) => !abilityIds.has(id));
-    console.log(`  ability timing: ${abilityUses} uses of ${abilityIds.size} distinct abilities (${[...abilityIds].sort().join(', ')}) under first-usable, random and late firing`);
+    console.log(`  ability timing: ${abilityUses} uses of ${abilityIds.size} distinct abilities (${[...abilityIds].sort().join(', ')}) under first-usable, random and late firing, worst rise ${abilityWorst.toExponential(2)}`);
     if (missing.length) note(`ability timing: never fired ${missing.join(', ')}`);
+    for (const [label, PC] of popCounters) {
+      for (const e of PC.check(label)) note(e);
+      for (const [w, paid] of PC.paid) { popsPaid += paid; popsBound += PC.bound(w); popWaves++; }
+    }
+    console.log(`  bounty conservation: ${popsPaid} paid pops against ${popsBound} shells sent over ${popWaves} waves (nanite regrowth and Maw volleys included)`);
   }
 
   // 1g. random play: thousands of commands, waves and ability uses; W - E never rises
@@ -386,12 +438,12 @@ function arbitrage(quick) {
     }
     worst = Math.max(worst, L.worst);
   }
-  console.log(`  targeted tests: undo loop, sell after a wave, Beacon discount loop, Rig/Beacon never discounted, vault bound, save/load`);
+  console.log(`  targeted tests: undo loop, sell after a wave, Beacon discount loop, Rig/Beacon never discounted, vault bound, save/load, bounty conservation`);
   console.log(`  random play: ${trials} runs, ${commands} commands, ${steps} sim ticks, ${abilities} ability uses, worst rise of credits + assets above income: ${worst.toExponential(2)}`);
   const unique = [...new Set(errs)];
   for (const e of unique.slice(0, 12)) violate('arbitrage', e);
   if (!unique.length) console.log('  PASS: no loop creates credits');
-  report.sections.arbitrage = { trials, commands, steps, abilities: abilities + abilityUses, abilityIds: [...abilityIds], worst, errors: unique };
+  report.sections.arbitrage = { trials, commands, steps, abilities: abilities + abilityUses, abilityIds: [...abilityIds], worst, popsPaid, popsBound, popWaves, errors: unique };
 }
 
 // ============================================================================================
@@ -631,11 +683,11 @@ async function bench(quick) {
       if (ok < rows.length) violate('bench', `rig: ${rows.length - ok} configs pay back in under 8 waves`);
     }
   }
-  console.log('  ' + pad('tower', 10) + pad('kind', 9) + padL('pass', 8) + '   by highest tier (pass/configs)             mean eta by tier (target 10, 10.5, 11.2, 13, 16, 25)');
+  console.log('  ' + pad('tower', 10) + pad('kind', 9) + padL('pass', 8) + '   by highest tier (pass/configs)               mean eta by tier (target 10, 10.5, 11.2, 13, 16, 25)');
   for (const [type, b] of Object.entries(byTower)) {
     const tierStr = b.tiers ? b.tiers.map((t, i) => `T${i} ${t[0]}/${t[1]}`).join('  ') : '';
     const eff = b.meanEta ? b.meanEta.map((x) => (x === null ? '-' : x.toFixed(1))).join(' ') : '';
-    console.log('  ' + pad(type, 10) + pad(b.kind, 9) + padL(`${b.pass}/${b.n}`, 8) + '   ' + pad(tierStr, 44) + eff);
+    console.log('  ' + pad(type, 10) + pad(b.kind, 9) + padL(`${b.pass}/${b.n}`, 8) + '   ' + pad(tierStr, 46) + eff);
   }
   const low = Object.entries(byTower).filter(([, b]) => b.low && b.low.length).map(([t, b]) => `${t} ${b.low.join(' ')}`);
   if (low.length) console.log('  LOW (reported, not violations): ' + low.join('; '));

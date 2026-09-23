@@ -277,7 +277,7 @@ sim.emit(event)
 - Immunity: `def.immune` includes dtype and dtype not in `src.bypass` -> no damage, emit `blocked`, the hit still consumes pierce.
 - Frozen + KINETIC without `FROZEN` bypass -> blocked.
 - Damage applied: `(amount + bonus[type] + (ship ? shipDamage : 0) + brittle.add) x brittle.mult x (crit ? mult : 1)`.
-- When shell HP reaches 0: pay bounty `incomeFactor(enemy.wave)`, `pops += 1`, spawn children at the same `d` (spread +-6 units), children inherit phantom, nanite, origType, wave, hullMult, speedMult and `immuneProj`; plated is not inherited; `def.childMods` are forced on. **Overflow** (damage beyond the shell's remaining HP) is applied to each child, except for ships (no overflow into ship children). Overflow recursion is capped at the family depth.
+- When shell HP reaches 0: pay bounty `incomeFactor(enemy.wave)` unless the shell is unpaid (`owed === 0`: a nanite shell that regrew, or its children, beyond the shells the family had; a Maw volley past its paid count; docs/ECONOMY.md 1.1), `pops += 1`, spawn children at the same `d` (spread +-6 units), children inherit phantom, nanite, origType, wave, hullMult, speedMult and `immuneProj`; plated is not inherited; `def.childMods` are forced on. **Overflow** (damage beyond the shell's remaining HP) is applied to each child, except for ships (no overflow into ship children). Overflow recursion is capped at the family depth.
 - Leak: `lives -= remainingMass` where remainingMass = current hp + children mass (with hullMult). Titan leak sets lives to 0.
 
 ## 7. Waves contract (`src/sim/wavegen.js`)
@@ -357,7 +357,7 @@ Additions and deviations the modules settled on while being built. They extend t
 - The `vault` event's `amount` is what stayed in the vault (0 once it is full); the overflow is paid as a `cash` event.
 - Commander XP: `heroXpNeed(L) = HERO_XP_K x L^1.6` with `HERO_XP_K = 35` (was 150; see docs/ECONOMY.md 6).
 - Ability ids are unique across all towers and Commanders because `abilityBar()` groups by id (Brick's ability is `rocketbarrage`, the mortar's is `barrage`).
-- Conventions tower files rely on: per-wave scratch lives in `tower.data` keys starting with `_field_` or `_beam_` (deleted when the build phase starts, so saves never hold it); the engine keeps a drone attack's drones in `tower.data['_drones_' + key]`; custom code may put dynamic fields on enemies (Gravity Well `gRew`, Drone Bay `_towed`, chain stamp `_xs`), which never outlive a wave. The built-in field `pull` is unbounded; custom pulls use a per-enemy budget so waves always end.
+- Conventions tower files rely on: per-wave scratch lives in `tower.data` keys starting with `_field_` or `_beam_` (deleted when the build phase starts, so saves never hold it); the engine keeps a drone attack's drones in `tower.data['_drones_' + key]`; custom code may put dynamic fields on enemies (Gravity Well `gRew`, Drone Bay `_towed`, chain stamp `_xs`), which never outlive a wave. The built-in field `pull` is unbounded; custom pulls use a per-enemy budget so waves always end, and `spawnChildren` copies `gRew` and `_towed` to the children, so the budget belongs to the whole family (a nanite family that pops and regrows cannot refresh it). A new pull mechanic should store its budget in one of these fields or add its own to that copy.
 
 ### Engine behaviours tower authors should know
 - A beam's `shipDamage` is added on every damage tick (every `tickRate`, 0.1 s by default), so `shipDamage: 1` is +10 per second against ships.
