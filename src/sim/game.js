@@ -21,12 +21,19 @@ import { updateProjectiles, launchProjectile, explode as explodeImpl } from './p
 import { snapDrones, removeTowerDrones, fireAt } from './attacks.js';
 import {
   placePrice, basePrice, upgradePrice, sellValue as sellValueImpl, payWaveIncome, withdrawVault,
-  refineryBonus, discountAt, consumeDiscount,
+  refineryBonus, discountAt, consumeDiscount, sellParts as sellPartsImpl,
 } from './economy.js';
 import { updateAbilities, abilityBar as abilityBarImpl, useAbility as useAbilityImpl, addTempBuff, towersNear } from './abilities.js';
-import { serializeSim, restoreSim } from './save.js';
+import { serializeSim, restoreSim, validateSave } from './save.js';
 
 export const EVENT_CAP = 4000;
+// Events the client must never miss (banners, autosave, records, Titan bar, sounds tied to
+// player actions). When the buffer passes EVENT_CAP only the other, cosmetic events (pop, hit,
+// shot, cash, explode, zap, blocked, pulse, ...) are dropped, oldest first.
+export const CRITICAL_EVENTS = new Set([
+  'waveStart', 'waveCleared', 'titan', 'titanDown', 'gameOver', 'leak',
+  'place', 'upgrade', 'sell', 'ability', 'heroLevel',
+]);
 export const AUTO_START_DELAY = 1.0;   // seconds of build phase before auto-start launches
 export const CORE_KEEPOUT = 60;
 export const BOUNDS_MARGIN = 10;
@@ -81,7 +88,10 @@ export class Sim {
     this._heroTower = null;
     this._heroXpPending = 0;
     this._scheduled = [];
+    // auto-start only counts down in a build phase entered by clearing a wave in this session:
+    // never before wave 1 and never right after a save is restored (_enterBuild arms it)
     this._autoTimer = AUTO_START_DELAY;
+    this._autoArmed = false;
     this._snap = null;
     this._popsThisTick = 0;
     this._lastBlocked = false;
@@ -94,7 +104,13 @@ export class Sim {
     this._lineHits = []; this._droneTaken = [];
   }
 
+  // Throws Error('Invalid save: <reason>') for a save that fails validateSave (clients catch it,
+  // clear the save and tell the player). Sim.validateSave(save) checks without building a Sim.
+  static validateSave(save) { return validateSave(save); }
+
   static fromSave(save) {
+    const bad = validateSave(save);
+    if (bad) throw new Error('Invalid save: ' + bad);
     const sim = new Sim({ mapId: save.mapId, difficulty: save.difficulty, seed: save.seed, heroId: save.heroId });
     restoreSim(sim, save);
     return sim;
@@ -106,7 +122,21 @@ export class Sim {
   emit(ev) {
     const evs = this.events;
     evs.push(ev);
-    if (evs.length > EVENT_CAP) evs.splice(0, evs.length - (EVENT_CAP - 500));
+    if (evs.length > EVENT_CAP) this._trimEvents();
+  }
+
+  // Drop the oldest cosmetic events until the buffer is back to EVENT_CAP - 500. Critical events
+  // (CRITICAL_EVENTS) are always kept, in order.
+  _trimEvents() {
+    const evs = this.events;
+    let drop = evs.length - (EVENT_CAP - 500);
+    let w = 0;
+    for (let i = 0; i < evs.length; i++) {
+      const ev = evs[i];
+      if (drop > 0 && !CRITICAL_EVENTS.has(ev.t)) { drop--; continue; }
+      evs[w++] = ev;
+    }
+    evs.length = w;
   }
 
   drainEvents() {
@@ -146,6 +176,8 @@ export class Sim {
     st.time = st.tick * TICK;
     this._popsThisTick = 0;
     if (this._scheduled.length) this._runScheduled();
+    // everything moves now; the hash is rebuilt right after, so nothing files into the old one
+    this._gridStale = true;
     this._spawnTick(dt);
     updateEnemies(this, dt);
     this.grid.build(st.enemies);
@@ -160,7 +192,7 @@ export class Sim {
     this._updateTitanState();
     if (st.lives <= 0) { this._gameOver(); return; }
     this._checkWaves();
-    if (st.phase === 'build' && st.autoStart) {
+    if (st.phase === 'build' && st.autoStart && this._autoArmed) {
       this._autoTimer -= dt;
       if (this._autoTimer <= 0) this.startWave();
     }
@@ -281,6 +313,7 @@ export class Sim {
     snapDrones(this);
     this._scheduled = [];
     this._autoTimer = AUTO_START_DELAY;
+    this._autoArmed = true;
     st.titan = null;
     this._titans = [];
     this._snap = null;
@@ -325,6 +358,7 @@ export class Sim {
     const st = this.state;
     if (st.phase === 'over') return fail('Game over');
     if (st.phase === 'build') {
+      this._autoArmed = false;
       this._snap = serializeSim(this);
       for (const t of st.towers) { t.undoPaid = 0; t.undoable = false; }
       st.phase = 'wave';
@@ -460,7 +494,7 @@ export class Sim {
     if (st.phase === 'over') { res.reason = 'Game over'; return res; }
     if (def.hero) {
       if (this._heroTower) { res.reason = 'Only one Commander per game'; return res; }
-      if (st.heroId && st.heroId !== type) { res.reason = 'A different Commander was chosen'; return res; }
+      if (st.heroId !== type) { res.reason = st.heroId ? 'A different Commander was chosen' : 'No Commander was chosen for this match'; return res; }
     }
     if (type === 'rig' && st.rigCount >= RIG_CAP) { res.reason = 'Mining Rig limit reached (' + RIG_CAP + ')'; return res; }
     const spot = this._spotReason(def, x, y);
@@ -487,6 +521,8 @@ export class Sim {
     if (type === 'rig') st.rigCount++;
     if (def.hero) this._heroTower = t;
     recomputeBuffs(this);
+    // build phase: drones join (and restyle) right away, exactly as a restored save lays them out
+    if (this.state.phase === 'build') snapDrones(this);
     this.emit({ t: 'place', tower: t.id, type, x, y, value: chk.price });
     return { ok: true, id: t.id, price: chk.price };
   }
@@ -553,6 +589,8 @@ export class Sim {
     if (t.levels[path] === 5) st.t5Owned[t.type + ':' + path] = t.id;
     refreshTower(this, t);
     recomputeBuffs(this);
+    // build phase: drones join (and restyle) right away, exactly as a restored save lays them out
+    if (this.state.phase === 'build') snapDrones(this);
     this.emit({ t: 'upgrade', tower: t.id, type: t.type, path, tier: t.levels[path], value: info.cost, name: info.name, x: t.x, y: t.y });
     return { ok: true, tier: t.levels[path], cost: info.cost };
   }
@@ -560,6 +598,14 @@ export class Sim {
   sellValue(towerId) {
     const t = this._towerById.get(towerId);
     return t ? sellValueImpl(this, t) : 0;
+  }
+
+  // What selling a tower pays, part by part (sellValue is always their sum):
+  // undo: credits spent on it this build phase, refunded in full; refund70: 70% of the rest of
+  // what was paid (rounded down); vault: a Mining Rig's banked balance.
+  sellParts(towerId) {
+    const t = this._towerById.get(towerId);
+    return t ? sellPartsImpl(this, t) : { undo: 0, refund70: 0, vault: 0, total: 0 };
   }
 
   sell(towerId) {
@@ -634,7 +680,10 @@ export class Sim {
     return {
       id: t.id, type: t.type, name: t.def.name, levels: t.levels.slice(),
       pops: t.pops, damage: t.damage, cashEarned: t.cashEarned,
-      sellValue: sellValueImpl(this, t), undoable: t.undoPaid > 0, paid: t.paid,
+      sellValue: sellValueImpl(this, t), sellParts: sellPartsImpl(this, t), paid: t.paid,
+      // undoable: selling refunds everything paid (bought this build phase); partialUndo: some
+      // of it (upgrades bought this build phase on an older tower) comes back in full
+      undoable: t.undoable, partialUndo: t.undoPaid > 0 && !t.undoable,
       targeting: t.targeting, modes: s.targetModes.slice(),
       range: s.range, detection: s.detection,
       buffed: s.buffed, discount: t.discount, disabled: t.disabledT > 0,
@@ -783,7 +832,11 @@ export class Sim {
       h.str(e.type).num(e.lane).num(e.d).num(e.hp).num(e.x).num(e.y).bool(e.phantom).bool(e.nanite).num(e.slowMult).num(e.frozenT);
     }
     for (const p of st.projectiles) h.num(p.x).num(p.y).num(p.pierce).num(p.life);
-    for (const d of st.drones) h.num(d.x).num(d.y);
+    // drones in a canonical order (tower, attack, slot): a live run appends new drones at the
+    // end while a restored one rebuilds them tower by tower, with identical drones
+    const drones = st.drones.slice().sort((a, b) => a.towerId - b.towerId
+      || (a.key < b.key ? -1 : a.key > b.key ? 1 : 0) || a.idx - b.idx);
+    for (const d of drones) h.num(d.towerId).num(d.idx).num(d.x).num(d.y);
     return h.hex();
   }
 }

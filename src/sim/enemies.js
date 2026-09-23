@@ -1,6 +1,6 @@
 // Enemies: spawning, movement, statuses, damage and popping into children, nanite regrow,
 // leaks and Storm Titans. Pure. All functions take the Sim as the first argument.
-import { ENEMIES, REGROW_UP, GRADE, familyMass, SCOUT_HULL } from '../data/enemies.js';
+import { ENEMIES, familyMass, SCOUT_HULL } from '../data/enemies.js';
 import { BASE_SPEED, incomeFactor } from '../data/economy.js';
 
 export const REGROW_DELAY = 3;          // seconds without damage before a nanite regrows
@@ -28,6 +28,12 @@ export const MAW_SPIT_EVERY = 3.2;
 // wave forever (docs/BALANCE.md, termination).
 export const SHIP_STUN_IMMUNE = 1.0;
 export const MAW_SPIT_TYPES = ['rose', 'iron', 'geode', 'aurora', 'obsidian'];
+// The Maw appears every third Titan (tiers 1, 4, 7, ...), and the grade it spits rises one step
+// per appearance: Rose, Iron, Geode, Aurora, then Obsidian from its fifth appearance on.
+export function mawSpitType(tier) {
+  const n = Math.floor(Math.max(0, (tier | 0) - 1) / TITAN_ORDER.length);
+  return MAW_SPIT_TYPES[Math.min(MAW_SPIT_TYPES.length - 1, n)];
+}
 
 export const TITAN_KINDS = {
   maw:   { name: 'The Maw',   title: 'Storm Titan', trait: 'Spits meteors behind itself.', color: '#ff5d73' },
@@ -92,7 +98,7 @@ export function createEnemy(sim, type, o = {}) {
     plated,
     origType,
     regrowT: 0,
-    slowMult: 1, slowT: 0, frozenT: 0, stunT: 0, stunImmT: 0,
+    slowMult: 1, slowT: 0, slowDtype: null, frozenT: 0, stunT: 0, stunImmT: 0,
     burn: null, brittle: null, exposedT: 0, exposeMult: 1,
     immuneProj: -1,
     titan: null,
@@ -106,6 +112,8 @@ export function createEnemy(sim, type, o = {}) {
   e.angle = sim._pt.angle;
   sim.state.enemies.push(e);
   sim._enemyById.set(e.id, e);
+  // mid-tick spawns (children, Maw spit) are visible to area queries in the same tick
+  if (!sim._gridStale) sim.grid.insert(e);
   sim._waveAliveInc(e.wave);
   return e;
 }
@@ -123,9 +131,15 @@ export function createTitan(sim, spec, { lane = 0, wave, speedMult = 1, d = 0 } 
     kind, tier, name: TITAN_KINDS[kind].name,
     shield, maxShield: shield, lastHitT: sim.state.time,
     blinks: 0, spitT: MAW_SPIT_EVERY, paidVolleys: Math.ceil(cross / MAW_SPIT_EVERY),
+    spitType: kind === 'maw' ? mawSpitType(tier) : null,
   };
   sim.emit({ t: 'titan', name: e.titan.name, kind, wave: e.wave, tier, id: e.id });
   return e;
+}
+
+// Re-file an enemy that moved mid-tick (knockback, blink, pull) in the spatial hash.
+export function refile(sim, e) {
+  if (!sim._gridStale && !e.dead) sim.grid.insert(e);
 }
 
 // Recompute x, y, angle from lane + d (+ lateral offset).
@@ -158,26 +172,43 @@ function setType(sim, e, type) {
   e.childMass = childMassOf(type, e.hullMult);
 }
 
-// Nanite regrowth: one grade up along REGROW_UP toward origType; special types return to
-// origType directly; an intact origType shell with lost HP heals to full.
+// Direct parent of `type` inside the family tree of `root` (depth-first, children in their
+// listed order), or null when `type` is not a descendant of `root`. A Rose inside a Geode family
+// has two possible parents (Magma and Comet); the first one listed (Magma) is used.
+const parentCache = new Map();
+export function familyParent(root, type) {
+  const key = root + '>' + type;
+  let r = parentCache.get(key);
+  if (r !== undefined) return r;
+  r = null;
+  const walk = (id) => {
+    const def = ENEMIES[id];
+    if (!def) return false;
+    for (const [c] of def.children) {
+      if (c === type) { r = id; return true; }
+      if (walk(c)) return true;
+    }
+    return false;
+  };
+  if (root !== type) walk(root);
+  parentCache.set(key, r);
+  return r;
+}
+
+// Nanite regrowth (docs/DESIGN.md 4): a shell regrows exactly one grade, into its direct parent
+// in the family tree of its original type (Rust to Cobalt, Rose to Magma in an Obsidian family,
+// Geode to Aurora, Aurora to Obsidian), never above origType. An intact origType shell with lost
+// HP heals to full instead.
 export function regrow(sim, e) {
   e.regrowT = 0;
   if (e.type === e.origType) {
     if (e.hp < e.maxHp) { e.hp = e.maxHp; sim.emit({ t: 'regrow', x: e.x, y: e.y, type: e.type, id: e.id }); }
     return;
   }
+  const next = familyParent(e.origType, e.type);
+  if (!next || !ENEMIES[next] || ENEMIES[next].kind === 'ship') return;
   // the family grows but its bounty does not: it still pays only for the shells it had
   if (e.owed < 0) e.owed = e.def.shells;
-  let next = null;
-  const gCur = GRADE[e.type], gOrig = GRADE[e.origType];
-  if (gCur && gOrig) {
-    if (gCur < gOrig) next = REGROW_UP[e.type];
-  } else if (gCur && REGROW_UP[e.type]) {
-    next = REGROW_UP[e.type];
-  } else {
-    next = e.origType;
-  }
-  if (!next || !ENEMIES[next]) return;
   setType(sim, e, next);
   sim.emit({ t: 'regrow', x: e.x, y: e.y, type: next, id: e.id });
 }
@@ -240,20 +271,32 @@ function applyRaw(sim, e, dmg, dtype, src, projId, onHit) {
       // KINETIC damage is cut to AEGIS_KINETIC_MULT against the shield (attacks that bypass
       // 'SHIELD' hit it at full strength); whatever breaks through goes on to the hull
       const km = dtype === 'KINETIC' && !(src.bypass && src.bypass.indexOf('SHIELD') >= 0) ? AEGIS_KINETIC_MULT : 1;
-      const s = dmg * km < T.shield ? dmg * km : T.shield;
-      T.shield -= s; dmg -= s / km; dealt += s;
-      if (T.shield <= 0) { T.shield = 0; sim.emit({ t: 'shieldBreak', x: e.x, y: e.y, id: e.id }); }
-      if (dmg <= 0) { credit(sim, tower, dealt); return dealt; }
+      // Work in shield units so a fully absorbed hit leaves exactly nothing for the hull (no
+      // float residue). On-hit effects only land on the hull: a hit the shield absorbs in full
+      // applies no stun, slow, burn or brittle (docs/ARCHITECTURE.md 6, damage and popping rules).
+      const want = dmg * km;
+      if (want < T.shield - 1e-9) {
+        T.shield -= want; dealt += want;
+        credit(sim, tower, dealt);
+        return dealt;
+      }
+      const s = T.shield;
+      T.shield = 0; dealt += s;
+      sim.emit({ t: 'shieldBreak', x: e.x, y: e.y, id: e.id });
+      dmg -= s / km;
+      if (dmg <= 1e-9) { credit(sim, tower, dealt); return dealt; }
     }
   }
-  if (dmg < e.hp) {
+  // a hit within 1e-9 of the remaining HP breaks the shell (fractional beam, burn and field
+  // ticks would otherwise leave a live 1e-16 HP sliver that needs one more hit)
+  if (dmg < e.hp - 1e-9) {
     e.hp -= dmg;
     dealt += dmg;
     credit(sim, tower, dealt);
     if (onHit) applyEffects(sim, e, onHit, src);
     return dealt;
   }
-  const over = dmg - e.hp;
+  const over = dmg > e.hp ? dmg - e.hp : 0;
   dealt += e.hp;
   credit(sim, tower, dealt);
   dealt += popEnemy(sim, e, src, projId, over, dtype, onHit);
@@ -340,8 +383,13 @@ export function spawnChildren(sim, e, projId = -1) {
       // (out/exploits/undertow_stall.mjs)
       if (e.gRew) kid.gRew = e.gRew;
       if (e._towed) kid._towed = e._towed;
-      // inherit statuses (not freeze or stun)
-      if (e.slowT > 0) { kid.slowMult = e.slowMult; kid.slowT = e.slowT; }
+      // inherit statuses (not freeze or stun). A slow passes down only between enemies of the
+      // same kind (a ship's slow is ship-strength, so meteor cargo does not keep it), and a CRYO
+      // slow never passes to a CRYO-immune child (Geode, Comet).
+      if (e.slowT > 0 && kid.ship === e.ship
+        && !(e.slowDtype === 'CRYO' && cdef.immune.indexOf('CRYO') >= 0)) {
+        kid.slowMult = e.slowMult; kid.slowT = e.slowT; kid.slowDtype = e.slowDtype;
+      }
       if (e.exposedT > 0) { kid.exposedT = e.exposedT; kid.exposeMult = e.exposeMult; }
       if (e.burn !== null && !kid.ship && kid.def.immune.indexOf('THERMAL') < 0) {
         kid.burn = e.burn.map((b) => ({ dps: b.dps, t: b.t, acc: b.acc, src: b.src, towerId: b.towerId }));
@@ -364,9 +412,11 @@ function clampOff(sim, off) {
 export const TITAN_SLOW_RESIST = 0.5;
 function titanSlow(m) { return 1 - (1 - m) * (1 - TITAN_SLOW_RESIST); }
 
-function setSlow(e, mult, t) {
-  if (e.slowT <= 0 || mult < e.slowMult) { e.slowMult = mult; e.slowT = t; }
-  else if (mult === e.slowMult && t > e.slowT) e.slowT = t;
+// e.slowDtype remembers the damage type of the slow in force, so children know whether a CRYO
+// slow may pass to them (spawnChildren).
+function setSlow(e, mult, t, dtype) {
+  if (e.slowT <= 0 || mult < e.slowMult) { e.slowMult = mult; e.slowT = t; e.slowDtype = dtype; }
+  else if (mult === e.slowMult && t > e.slowT) { e.slowT = t; if (dtype !== 'CRYO') e.slowDtype = dtype; }
 }
 
 // On-hit effects (docs/ARCHITECTURE.md 5.5).
@@ -382,14 +432,14 @@ export function applyEffects(sim, e, fx, src) {
     if (!(dtype === 'CRYO' && e.type === 'comet') && !cryoImmune) {
       let m = ship ? slow.shipMult : slow.mult;
       if (e.titan !== null && m !== undefined) m = slow.titanMult ?? titanSlow(m);
-      if (m !== undefined && m < 1) setSlow(e, m, slow.t ?? 1);
+      if (m !== undefined && m < 1) setSlow(e, m, slow.t ?? 1, dtype);
     }
   }
   const fr = fx.freeze;
   if (fr && e.type !== 'comet' && !cryoImmune) {
     if (ship) {
       const m = fr.shipMult ?? SHIP_FREEZE_SLOW;
-      setSlow(e, e.titan !== null ? (fr.titanMult ?? titanSlow(m)) : m, fr.t);
+      setSlow(e, e.titan !== null ? (fr.titanMult ?? titanSlow(m)) : m, fr.t, dtype);
     }
     else if (fr.t > e.frozenT) { e.frozenT = fr.t; if (!e._frozeEmit) { e._frozeEmit = true; } }
   }
@@ -406,18 +456,11 @@ export function applyEffects(sim, e, fx, src) {
     }
   }
   const br = fx.brittle;
-  if (br) {
-    const cur = e.brittle;
-    if (cur === null) e.brittle = { add: br.add || 0, mult: br.mult || 1, t: br.t || 1 };
-    else {
-      if ((br.add || 0) >= cur.add && (br.mult || 1) >= cur.mult) { cur.add = br.add || 0; cur.mult = br.mult || 1; }
-      if ((br.t || 1) > cur.t) cur.t = br.t || 1;
-    }
-  }
+  if (br) addBrittle(e, br.add || 0, br.mult || 1, br.t || 1);
   const kb = fx.knockback;
   if (kb) {
     const k = ship ? (e.titan !== null ? 0 : (kb.shipDist || 0)) : (kb.dist || 0);
-    if (k > 0) { e.d = Math.max(0, e.d - k); placeOnPath(sim, e); }
+    if (k > 0) { e.d = Math.max(0, e.d - k); placeOnPath(sim, e); refile(sim, e); }
   }
   const ex = fx.expose;
   if (ex) {
@@ -425,6 +468,37 @@ export function applyEffects(sim, e, fx, src) {
     if (ex.mult && ex.mult > e.exposeMult) e.exposeMult = ex.mult;
   }
   if (fx.strip) e.phantom = false;
+}
+
+// Brittleness: every distinct brittle (add, mult) keeps its own timer in e._brit, and the one
+// in force (e.brittle) takes the best add and the best mult among the active entries, the way
+// auras merge. Hit order therefore never matters, and a weak long brittle never stretches a
+// strong short one (docs/ARCHITECTURE.md 5.5).
+function addBrittle(e, add, mult, t) {
+  let list = e._brit;
+  if (!list) list = e._brit = [];
+  let found = false;
+  for (let i = 0; i < list.length; i++) {
+    const b = list[i];
+    if (b.add === add && b.mult === mult) { if (t > b.t) b.t = t; found = true; break; }
+  }
+  if (!found) list.push({ add, mult, t });
+  syncBrittle(e);
+}
+
+function syncBrittle(e) {
+  const list = e._brit;
+  if (!list || list.length === 0) { e.brittle = null; e._brit = null; return; }
+  let add = 0, mult = 1, t = 0;
+  for (let i = 0; i < list.length; i++) {
+    const b = list[i];
+    if (b.add > add) add = b.add;
+    if (b.mult > mult) mult = b.mult;
+    if (b.t > t) t = b.t;
+  }
+  const cur = e.brittle;
+  if (cur === null) e.brittle = { add, mult, t };
+  else { cur.add = add; cur.mult = mult; cur.t = t; }
 }
 
 function addBurn(e, burn, src) {
@@ -455,20 +529,30 @@ export function updateEnemies(sim, dt) {
     if (e.stunT > 0) { e.stunT -= dt; if (e.stunT <= 0 && e.ship) e.stunImmT = SHIP_STUN_IMMUNE; }
     else if (e.stunImmT > 0) e.stunImmT -= dt;
     if (e.frozenT > 0) { e.frozenT -= dt; if (e.frozenT <= 0) { e.frozenT = 0; e._frozeEmit = false; } }
-    if (e.slowT > 0) { e.slowT -= dt; if (e.slowT <= 0) { e.slowT = 0; e.slowMult = 1; } }
+    if (e.slowT > 0) { e.slowT -= dt; if (e.slowT <= 0) { e.slowT = 0; e.slowMult = 1; e.slowDtype = null; } }
     if (e.exposedT > 0) { e.exposedT -= dt; if (e.exposedT <= 0) { e.exposedT = 0; e.exposeMult = 1; } }
-    if (e.brittle !== null) { e.brittle.t -= dt; if (e.brittle.t <= 0) e.brittle = null; }
+    if (e.brittle !== null) {
+      const list = e._brit;
+      if (!list) { e.brittle.t -= dt; if (e.brittle.t <= 0) e.brittle = null; }
+      else {
+        let gone = false;
+        for (let k = list.length - 1; k >= 0; k--) { list[k].t -= dt; if (list[k].t <= 0) { list.splice(k, 1); gone = true; } }
+        if (gone) syncBrittle(e); else e.brittle.t -= dt;
+      }
+    }
     if (e.burn !== null) {
       const burns = e.burn;
       for (let k = burns.length - 1; k >= 0; k--) {
         const b = burns[k];
         b.t -= dt; b.acc += dt;
-        if (b.acc >= BURN_TICK) {
+        // tolerance: after 30 ticks of 1/60 s the sum is a hair under 0.5, and without it a
+        // 1 s burn loses its second tick on the frame it expires
+        if (b.acc >= BURN_TICK - 1e-9) {
           b.acc -= BURN_TICK;
           damageEnemy(sim, e, b.dps * BURN_TICK, 'THERMAL', b.src, -1, null);
           if (e.dead) break;
         }
-        if (b.t <= 0) burns.splice(k, 1);
+        if (b.t <= 1e-9) burns.splice(k, 1);
       }
       if (e.dead) continue;
       if (burns.length === 0) e.burn = null;
@@ -516,7 +600,7 @@ function updateTitan(sim, e, dt) {
     T.spitT -= dt;
     if (T.spitT <= 0) {
       T.spitT += MAW_SPIT_EVERY;
-      const type = MAW_SPIT_TYPES[Math.min(MAW_SPIT_TYPES.length - 1, T.tier - 1)];
+      const type = T.spitType;
       const count = Math.min(8, 2 + T.tier);
       // volleys past one full-speed crossing (a slowed or stalled Maw) pay no bounty
       const paid = T.paidVolleys > 0;
@@ -540,9 +624,10 @@ function updateTitan(sim, e, dt) {
       T.blinks++;
       const path = sim.paths[e.lane] || sim.paths[0];
       const x0 = e.x, y0 = e.y;
-      e.d = Math.min(path.length - 90, e.d + RIFT_BLINK);
-      if (e.d < 0) e.d = 0;
+      // forward only: near the Core the blink stops 90 units short of it and never moves back
+      e.d = Math.max(e.d, Math.min(path.length - 90, e.d + RIFT_BLINK));
       placeOnPath(sim, e);
+      refile(sim, e);
       const r2 = RIFT_STUN_RADIUS * RIFT_STUN_RADIUS;
       for (const t of st.towers) {
         const dx = t.x - e.x, dy = t.y - e.y;

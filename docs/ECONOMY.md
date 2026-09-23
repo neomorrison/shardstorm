@@ -21,7 +21,7 @@ Credits are stored as a float; the HUD shows `floor(credits)`. Purchases require
 
 **Bounty conservation.** Bounty is paid once per shell the storm sent, never for shells created on the field. Two things create shells there, and both are capped (`e.owed` in `src/sim/enemies.js`):
 - **Nanite regrowth.** A regrown shell and every child it later splits into share the bounty of the shells it had before it regrew. A family that is popped, left alone for 3 s and popped again keeps growing, but it never pays more than it was worth when it arrived.
-- **The Maw's volleys.** The Maw pays for as many volleys as it spits crossing its channel once at full speed (`ceil(crossing time / 3.2 s)`, counted from where it appears). Volleys past that (a slowed or stalled Maw) pay nothing.
+- **The Maw's volleys.** The Maw pays for as many volleys as it spits crossing its channel once at full speed (`ceil(crossing time / 3.2 s)`, counted from where it appears). Volleys past that (a slowed or stalled Maw) pay nothing. Each volley is `min(8, 2 + tier)` meteors of one grade that rises every Maw appearance: Rose (wave 20), Iron (80), Geode (140), Aurora (200), then Obsidian (`mawSpitType(tier)` in `src/sim/enemies.js`).
 
 An unpaid shell also gives no Refinery bonus and no Commander XP. So every wave pays bounty for at most the shells in its groups, its Titan and the Maw's paid volleys, whatever the defense does.
 
@@ -49,7 +49,7 @@ Command Beacon path C gives 5 / 10 / 15% off tower purchases and upgrades for to
 
 ### 2.3 Selling
 - Sell value = **70% of credits actually paid** for the tower and its upgrades (after discounts and difficulty).
-- **Undo refund**: a tower bought during the current build phase, before any wave has launched since, sells for 100% of what was paid. No value can be created because no wave ran in between.
+- **Undo refund**: credits spent during the current build phase, before any wave has launched since, come back at 100%. A tower bought this build phase sells for everything paid; an older tower upgraded this build phase sells for those upgrades in full plus 70% of what was paid before (`sim.sellParts(id)` returns `{ undo, refund70, vault, total }`, and `towerInfo` carries `undoable` for a full refund and `partialUndo` for the mixed case). A Beacon whose discount was used on a purchase loses its undo refund. No value can be created because no wave ran in between.
 - Since refunds are always <= what was paid, buying and selling can never create credits (no arbitrage).
 
 ### 2.4 Tier price ratios (guideline)
@@ -174,7 +174,7 @@ TITAN_K = 0.7, TITAN_SURGE_EXP = 0.5
 | hull | 410 | 2.8k | 12.8k | 73k | 1.32M | 82M |
 | hull / B(w) | 0.70 | 0.99 | 1.21 | 0.98 | 0.22 | 0.014 |
 
-Before the surge the Titan tracks the threat budget of its own wave, so every early Titan is the same kind of single-target check relative to the economy the player has at that point, and the sqrt(tier) factor makes each one a little stiffer than the last. Once the surge starts, the Titan follows only the square root of it: the surge is flood pressure, spread over hundreds of spawns that area damage handles, while a Titan is one target. With the full surge (the previous rule) the wave 100 Aegis was 1.57 x B(100) of single-target hull and ended every strong run on that one wave; now it is a real check that some defenses fail and the flood decides the rest (docs/BALANCE.md 4). The hull multiplier H is already inside B(w), so it is not applied again.
+Before the surge the Titan tracks the threat budget of its own wave, so every early Titan is the same kind of single-target check relative to the economy the player has at that point, and the sqrt(tier) factor makes each one a little stiffer than the last. Once the surge starts, the Titan follows only the square root of it: the surge is flood pressure, spread over hundreds of spawns that area damage handles, while a Titan is one target. With the full surge (the previous rule) the wave 100 Aegis was 1.57 x B(100) of single-target hull and ended every strong run on that one wave; now it is a real check that some defenses fail and the flood decides the rest (docs/BALANCE.md 4). The hull multiplier H is already inside B(w), so it is not applied again. Past about wave 1190 B(w) and S(w) overflow a double, so `titanHp` switches to the same formula in log space there and caps the hull at `TITAN_MAX_HP = 1e300`: the hull is finite at every tier (only reachable with the debug `skipTo`).
 
 Titans resist crowd control like every ship: slows are half as strong on a Titan, stuns last half as long, and a ship cannot be stunned again for 1 s after a stun ends (`SHIP_STUN_IMMUNE`), so stacked stunners hold a ship still for at most `stun / (stun + 1 s)` of the time and every wave ends. Pulling an enemy back along the channel (Gravity Well Undertow, Drone Bay tractors) spends a per-enemy budget that children inherit from their parent, so no pop-and-regrow cycle can refresh it.
 
@@ -185,7 +185,7 @@ Authored waves 1 to 15 are stretched in time without changing their mass: every 
 
 ### 4.8 First exposures
 New threats arrive in a survivable first dose with a tip that names the counter:
-- **Iron (wave 16):** two Iron Meteors in an otherwise ordinary wave. An all-KINETIC defense leaks them for 22 Integrity, a clear signal with most of the Integrity left; Iron comes in larger numbers from wave 17.
+- **Iron (wave 16):** two Iron Meteors in an otherwise ordinary wave. An all-KINETIC defense leaks them for 22 Integrity, a clear signal with most of the Integrity left. Iron keeps appearing from wave 17 (one on 17, two on 18 and 19) and grows from wave 20.
 - **Specter (wave 50):** the first Specter is a **scout** (`scout` group modifier): an empty hold and a fifth of its hull (`SCOUT_HULL = 0.2`, 80 HP), so a leak costs 80 Integrity instead of 816. Wave 49 warns about it; full Specters follow from wave 53.
 
 ## 5. Leaks

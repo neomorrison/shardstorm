@@ -106,13 +106,13 @@ export default {
           apply(s) { atLeast(s, 'rateMult', 1.3); } },
         { name: 'Coolant Loop', cost: 900, desc: 'Towers inside the aura attack 40% faster.',
           apply(s) { atLeast(s, 'rateMult', 1.4); } },
-        { name: 'Harmonic Drive', cost: 2800, desc: 'Towers inside a wider 180 unit aura attack 45% faster and their shots pierce 1 more target.',
+        { name: 'Harmonic Drive', cost: 2800, desc: 'Towers inside a wider 180 unit aura attack 45% faster and their shots pierce 1 more target (not Laser beams, lightning arcs or Rail slugs before Hull Breaker).',
           apply(s) { grow(s, 15); atLeast(s, 'rateMult', 1.45); atLeast(s, 'pierceAdd', 1); } },
-        { name: 'Battle Protocol', cost: 16500, desc: 'Towers inside the aura attack 50% faster, pierce 1 more target and deal 1 more damage per hit.',
-          apply(s) { atLeast(s, 'rateMult', 1.5); atLeast(s, 'pierceAdd', 1); atLeast(s, 'damageAdd', 1); } },
-        { name: 'War Council', cost: 50000, desc: 'Towers inside a 200 unit aura attack 65% faster, pierce 2 more and deal 2 more damage, and War Council makes them fire twice as fast for 10 s.',
+        { name: 'Battle Protocol', cost: 16500, desc: 'Towers inside the aura attack 50% faster, their shots pierce 2 more targets (same exceptions as Harmonic Drive) and deal 1 more damage per hit (20% more for continuous damage).',
+          apply(s) { atLeast(s, 'rateMult', 1.5); atLeast(s, 'pierceAdd', 2); atLeast(s, 'damageAdd', 1); } },
+        { name: 'War Council', cost: 50000, desc: 'Towers inside a 200 unit aura attack 65% faster, their shots pierce 3 more targets and deal 2 more damage (40% more for continuous damage), and War Council makes them fire twice as fast for 10 s.',
           apply(s) {
-            grow(s, 20); atLeast(s, 'rateMult', 1.65); atLeast(s, 'pierceAdd', 2); atLeast(s, 'damageAdd', 2);
+            grow(s, 20); atLeast(s, 'rateMult', 1.65); atLeast(s, 'pierceAdd', 3); atLeast(s, 'damageAdd', 2);
             s.abilities.push(warCouncil);
           } },
       ],
@@ -120,7 +120,7 @@ export default {
     {
       name: 'Supply',
       upgrades: [
-        { name: 'Supply Depot', cost: 360, desc: 'Towers bought or upgraded inside the aura cost 5% less (never Mining Rigs or Beacons).',
+        { name: 'Supply Depot', cost: 360, desc: 'Towers bought or upgraded inside the aura cost 5% less (never Mining Rigs, Beacons or Commanders).',
           apply(s) { atLeast(s, 'discount', 0.05); } },
         { name: 'Bulk Contracts', cost: 720, desc: 'Towers bought or upgraded inside the aura cost 10% less.',
           apply(s) { atLeast(s, 'discount', 0.1); } },
@@ -128,7 +128,7 @@ export default {
           apply(s) { grow(s, 20); atLeast(s, 'discount', 0.15); } },
         { name: 'Munitions Depot', cost: 8000, desc: 'Special ammunition lets every tower inside a 200 unit aura damage Iron and Magma meteors.',
           apply(s) { grow(s, 15); addBypass(s, ['iron', 'magma']); } },
-        { name: 'Command Nexus', cost: 45000, desc: 'Towers inside a 260 unit aura ignore every meteor immunity, hit frozen targets, and gain an extra 10% range, 20% attack speed, 1 pierce and 1 damage.',
+        { name: 'Command Nexus', cost: 45000, desc: 'Towers inside a 260 unit aura ignore every meteor immunity, hit frozen targets, and gain an extra 10% range, 20% attack speed, 1 pierce and 1 damage (pierce skips Laser beams, lightning arcs and Rail slugs before Hull Breaker; continuous damage gets 20% more).',
           apply(s) {
             // Adds to whatever the aura already gives, so Radar and Overclock crosspaths still count.
             grow(s, 60);

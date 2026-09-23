@@ -121,12 +121,13 @@ const zeus = {
   icon: 'zeus',
   cooldown: 50,
   duration: 1,
-  desc: 'Lightning strikes the 6 strongest enemies on the map for 2500 ENERGY damage each and stuns them for 1.5 s.',
+  desc: 'Lightning strikes the 6 strongest enemies on the map (never Prism meteors) for 2,500 ENERGY damage each and stuns them for 1.5 s (Storm Titans half as long), and each strike\'s 110 unit blast deals 30 damage to up to 40 enemies around it.',
   activate(sim, tower) {
     const struck = [];
     const src = { tower, attackKey: 'zeus', dtype: 'ENERGY' };
     for (let i = 0; i < ZEUS_STRIKES; i++) {
       sim.after(0.12 + i * 0.14, (s) => {
+        if (s.getTower(tower.id) !== tower) return; // coil sold mid-strike
         const e = strongest(s, struck);
         if (!e) return;
         struck.push(e.id);
@@ -196,7 +197,7 @@ export default {
           apply(s) { const a = main(s); s.range += 25; a.jumps += 2; } },
         { name: 'Capacitors', cost: 1100, desc: 'Fires 33% faster and arcs deal 2 damage.',
           apply(s) { const a = main(s); a.cooldown *= 0.75; a.damage += 1; } },
-        { name: 'Ball Lightning', cost: 1800, desc: 'Every 2 s launches a ball of lightning that rolls up the channel through 40 meteors, zapping 3 nearby meteors (Phantoms too) every 0.3 s.',
+        { name: 'Ball Lightning', cost: 1800, desc: 'Every 2 s launches a ball of lightning that rolls up the channel through 40 meteors for 1 damage each, and every 0.3 s zaps the 3 nearest meteors within 75 units (Phantoms too) for 1 damage.',
           apply(s) {
             s.attacks.orb = {
               kind: 'projectile', cooldown: 2, damage: 1, pierce: 40, dtype: 'ENERGY', speed: 380, projRadius: 11,
@@ -207,7 +208,7 @@ export default {
               approach: 380, roll: 95, zapEvery: 0.3, zapCount: 3, zapRadius: 75, update: orbUpdate,
             };
           } },
-        { name: 'Plasma Orbs', cost: 7400, desc: 'Orbs launch every second, hit 80 meteors for 2 damage, zap 5 meteors every 0.25 s and can shatter Prism meteors.',
+        { name: 'Plasma Orbs', cost: 7400, desc: 'Orbs launch every second, hit 80 meteors for 2 damage, zap 5 meteors for 2 damage every 0.25 s and can shatter Prism meteors.',
           apply(s) {
             const o = s.attacks.orb, fx = s.attacks.orbfx;
             o.cooldown *= 0.5; o.pierce += 40; o.damage += 1; o.projRadius = 14; o.color = '#d08cff';
@@ -215,7 +216,7 @@ export default {
             fx.damage += 1; fx.zapCount += 2; fx.zapEvery = 0.25;
             fx.bypass = [...(fx.bypass || []), 'prism'];
           } },
-        { name: 'Plasma Tempest', cost: 50000, desc: 'Launches huge plasma orbs every 0.6 s that hit 180 meteors for 5 damage and zap 6 meteors within 150 units.',
+        { name: 'Plasma Tempest', cost: 50000, desc: 'Launches huge, slower-rolling plasma orbs every 0.6 s that hit 180 meteors for 5 damage and zap 6 meteors within 150 units for 5 damage.',
           apply(s) {
             const o = s.attacks.orb, fx = s.attacks.orbfx;
             o.cooldown = 0.6; o.pierce += 100; o.damage += 3; o.projRadius = 24; o.lifetime = 7; o.color = '#c070ff'; o.visual = 'plasma orb';
@@ -234,7 +235,8 @@ export default {
         { name: 'Overload', cost: 2400, desc: 'Arcs become heavy overload bolts that deal 12 damage (40 to ships) to one target and stun it for 0.5 s (ships 0.15 s).',
           apply(s) {
             const a = main(s);
-            a.jumps = Math.max(0, a.jumps - 3); a.falloff = 0.5; a.damage += 10; a.shipDamage = (a.shipDamage || 0) + 28;
+            // one target: also drops the extra jumps of Forked Arcs or Wide Coil crosspaths
+            a.jumps = 0; a.damage += 10; a.shipDamage = (a.shipDamage || 0) + 28;
             a.onHit = { ...(a.onHit || {}), stun: { t: 0.5, shipT: 0.15 } };
             a.color = '#ffe14d'; a.visual = 'overload';
           } },
@@ -245,7 +247,7 @@ export default {
             a.onHit = { ...(a.onHit || {}), stun: { t: 0.5, shipT: 0.25 } };
             a.color = '#fff08a';
           } },
-        { name: 'Zeus Array', cost: 43000, desc: 'Fires 2 bolts per shot, 67% faster, for 80 damage (500 to ships). Unlocks Wrath of Zeus: lightning strikes the 6 strongest enemies for 2500 damage.',
+        { name: 'Zeus Array', cost: 43000, desc: 'Fires 2 bolts per shot, 67% faster, for 80 damage (500 to ships). Unlocks Wrath of Zeus: lightning strikes the 6 strongest enemies for 2,500 damage.',
           apply(s) {
             const a = main(s);
             a.damage += 50; a.shipDamage = (a.shipDamage || 0) + 320; a.cooldown *= 0.6; a.count = (a.count || 1) + 1;

@@ -23,6 +23,19 @@
 
 const main = (s) => s.attacks.main;
 
+// Whole numbers in player-facing text use thousands separators (4,000), like the rest of the UI.
+function num(n) {
+  const neg = n < 0;
+  let s = String(Math.abs(n));
+  const dot = s.indexOf('.');
+  let int = dot >= 0 ? s.slice(0, dot) : s;
+  const frac = dot >= 0 ? s.slice(dot) : '';
+  let out = '';
+  while (int.length > 3) { out = ',' + int.slice(-3) + out; int = int.slice(0, -3); }
+  s = int + out + frac;
+  return neg ? '-' + s : s;
+}
+
 // ---------------------------------------------------------------- shared ability helpers
 
 function onScreen(e) {
@@ -88,15 +101,17 @@ function overchargeAbility(id, name, radius, rate, dur, cooldown) {
   };
 }
 
-// Orbital strikes land one after another on whatever is strongest at that moment, so a Titan
-// or big ship soaks the whole salvo and a dead target hands the rest to the next one.
+// Orbital strikes land one after another on the strongest ship at that moment (strength() ranks
+// Titans, then ships, then meteors, so a meteor is struck only when no ship is on screen): a
+// Titan or big ship soaks the whole salvo and a dead target hands the rest to the next one.
 function orbitalAbility(id, name, strikes, dmg, shipDmg, radius, cooldown) {
+  const BLAST_PIERCE = 30;
   return {
     id, name, icon: '\u2726', cooldown, duration: 0.3 + strikes * 0.12, // four-pointed star
-    desc: `Calls ${strikes} VOID strikes on the strongest ships on screen, each dealing ${shipDmg} damage to ships and ${dmg} to nearby meteors.`,
+    desc: `Calls ${strikes} VOID strikes on the strongest ships on screen (else the strongest meteors), each blasting up to ${BLAST_PIERCE} enemies within ${radius} units for ${num(dmg)} damage (${num(shipDmg)} to ships).`,
     activate(sim, tower) {
       const src = { tower, attackKey: id, dtype: 'VOID' };
-      const blast = { radius, damage: dmg, shipDamage: shipDmg - dmg, pierce: 30, dtype: 'VOID', visual: 'orbital' };
+      const blast = { radius, damage: dmg, shipDamage: shipDmg - dmg, pierce: BLAST_PIERCE, dtype: 'VOID', visual: 'orbital' };
       for (let k = 0; k < strikes; k++) {
         sim.after(0.3 + k * 0.12, (s) => {
           if (s.getTower(tower.id) !== tower) return; // Commander sold mid-salvo
@@ -165,10 +180,10 @@ const SUPERNOVA_2 = supernovaAbility('supernova2', 'Supernova II', 420, 20, 600,
 // ---------------------------------------------------------------- Brick
 
 function barrageAbility(id, name, rockets, dmg, shipDmg, radius, cooldown) {
-  const R = 340;
+  const R = 340, TARGETS = 5;
   return {
     id, name, icon: '\u2042', cooldown, duration: rockets * 0.06, // asterism
-    desc: `Fires ${rockets} homing rockets at the strongest enemies within ${R} units, each exploding for ${dmg} damage (${shipDmg} to ships).`,
+    desc: `Fires ${rockets} homing rockets at the ${TARGETS} strongest enemies within ${R} units, each exploding for ${num(dmg)} damage (${num(shipDmg)} to ships).`,
     activate(sim, tower) {
       const shot = {
         speed: 520, homing: 7, damage: 0, pierce: 1, dtype: 'BLAST', lifetime: 1.3, projRadius: 7,
@@ -178,7 +193,7 @@ function barrageAbility(id, name, rockets, dmg, shipDmg, radius, cooldown) {
       for (let k = 0; k < rockets; k++) {
         sim.after(k * 0.06, (s) => {
           if (s.getTower(tower.id) !== tower) return; // Commander sold mid-barrage
-          const targets = strongestN(s, tower, R, 5, 'BLAST', null);
+          const targets = strongestN(s, tower, R, TARGETS, 'BLAST', null);
           const tg = targets.length ? targets[k % targets.length] : null;
           const base = tg ? Math.atan2(tg.y - tower.y, tg.x - tower.x) : tower.angle;
           const ang = base + (s.rng() - 0.5) * 1.6;
@@ -196,9 +211,10 @@ function barrageAbility(id, name, rockets, dmg, shipDmg, radius, cooldown) {
 // died on the way, on whatever is strongest then.
 function punchAbility(id, name, dmg, stunT, wave, cooldown) {
   const SPEED = 1300;
+  const WAVE_PIERCE = 30;
   return {
     id, name, icon: '\u27a4', cooldown, duration: 1, // arrowhead
-    desc: `Launches a rocket fist at the strongest ship on screen for ${dmg} damage and stuns it for ${stunT} s (Storm Titans half as long).`,
+    desc: `Launches a rocket fist at the strongest ship on screen (else the strongest meteor) for ${num(dmg)} damage and stuns it for ${stunT} s (Storm Titans half as long); the impact shockwave deals ${num(wave.damage)} damage (${num(wave.ship)} to ships) to up to ${WAVE_PIERCE} enemies within ${wave.radius} units.`,
     activate(sim, tower) {
       const pick = (s) => strongest(s, tower, { shipsOnly: true }) || strongest(s, tower);
       const tg = pick(sim);
@@ -216,6 +232,7 @@ function punchAbility(id, name, dmg, stunT, wave, cooldown) {
       const bypass = ['BLAST'];
       sim.after(flight, (s) => {
         if (fist && fist.id === fistId && !fist.dead) fist.dead = true;
+        if (s.getTower(tower.id) !== tower) return; // Commander sold before the fist landed
         let e = s.getEnemy(tg.id);
         if (!e || e.dead) e = pick(s);
         if (!e) return;
@@ -223,7 +240,7 @@ function punchAbility(id, name, dmg, stunT, wave, cooldown) {
         const src = { tower, attackKey: id, dtype: 'BLAST', bypass };
         s.damage(e, dmg, 'BLAST', src);
         if (!e.dead) s.applyEffects(e, { stun: { t: stunT, shipT: stunT } }, src);
-        s.explode(x, y, { radius: wave.radius, damage: wave.damage, shipDamage: wave.ship - wave.damage, pierce: 30, dtype: 'BLAST', visual: 'punch' }, src);
+        s.explode(x, y, { radius: wave.radius, damage: wave.damage, shipDamage: wave.ship - wave.damage, pierce: WAVE_PIERCE, dtype: 'BLAST', visual: 'punch' }, src);
         s.emit({ t: 'abilityFx', id, x, y, r: wave.radius + 40 });
       });
     },
@@ -261,7 +278,7 @@ const vega = {
   cost: 550,
   radius: 20,
   blurb: 'Rapid pulse rifle with detection. Overcharges nearby towers.',
-  desc: 'A field captain with a KINETIC pulse rifle and built-in detection, good against almost anything. Cannot hurt Iron meteors until level 7.',
+  desc: 'A field captain with a KINETIC pulse rifle and built-in detection, good against almost anything. Cannot hurt Iron or frozen meteors until level 7.',
   art: { sprite: 'hero_vega', rotates: false, color: '#2ec4b6', accent: '#ff8a3d', shape: 'hex', hero: true },
   base: {
     range: 170,
@@ -373,7 +390,7 @@ const brick = {
   cost: 800,
   radius: 24,
   blurb: 'Heavy mech with a BLAST cannon that cracks ships.',
-  desc: 'A walking siege mech whose BLAST shells hit ships hard and splash nearby meteors. Cannot hurt Magma meteors, and targets the strongest enemy by default.',
+  desc: 'A walking siege mech whose BLAST shells hit ships hard and splash nearby meteors. Cannot hurt Magma meteors or Geodes, and targets the strongest enemy by default.',
   art: { sprite: 'hero_brick', rotates: false, color: '#ff8c2a', accent: '#3a3f4b', shape: 'oct', hero: true },
   base: {
     range: 165,
@@ -415,7 +432,8 @@ const brick = {
     /* 13 */ ['Reloads 15% faster.', (s) => { faster(main(s), 0.87); }],
     /* 14 */ ['Blasts deal 1 more damage and shells deal 2 more on a direct hit.', (s) => { const a = main(s); a.splash.damage += 1; a.damage += 2; }],
     /* 15 */ ['Siege Optics: gains detection, and shells stun meteors for 0.3 s, hit Specters and deal 8 more damage to ships.', (s) => {
-      const a = main(s); s.detection = true; a.shipDamage += 8; addBypass(a, 'specter');
+      // the blast gets its own copy so an aura's bypass buff adds to it instead of replacing it
+      const a = main(s); s.detection = true; a.shipDamage += 8; addBypass(a, 'specter'); addBypass(a.splash, 'specter');
       a.splash.onHit = { ...(a.splash.onHit || {}), stun: { t: 0.3, shipT: 0 } }; a.visual = 'siegeshell'; a.color = '#ff7a2a';
     }],
     /* 16 */ [upgradeNote(BARRAGE_2), (s) => { replaceAbility(s, 'rocketbarrage', BARRAGE_2); }],

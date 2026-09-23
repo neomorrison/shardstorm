@@ -120,7 +120,7 @@ const bombingRun = {
   icon: 'bombingrun',
   cooldown: 45,
   duration: 2.5,
-  desc: 'The wing sweeps the whole channel from the portal to the Core, dropping 36 bombs that deal 40 BLAST damage (160 to ships).',
+  desc: 'The wing sweeps the channel from the portal to the Core, dropping 36 bombs that each deal 40 BLAST damage (160 to ships) to up to 40 enemies within 72 units.',
   activate(sim, tower) {
     const dl = dronesOf(tower) || [];
     tower.data._field_run = { t: 0, t0: sim.state.time, sx: dl.map((d) => d.x), sy: dl.map((d) => d.y) };
@@ -132,7 +132,10 @@ const bombingRun = {
       for (let k = 0; k < per; k++) {
         const f = k / (per - 1);
         const p = sim.pathPoint(lane, L * (0.03 + 0.94 * f));
-        sim.after(RUN_DELAY + RUN_SWEEP * f + 0.05, (s) => s.explode(p.x, p.y, { radius: 72, damage: 40, pierce: 40, dtype: 'BLAST', shipDamage: 120 }, src));
+        sim.after(RUN_DELAY + RUN_SWEEP * f + 0.05, (s) => {
+          if (s.getTower(tower.id) !== tower) return; // bay sold mid-run
+          s.explode(p.x, p.y, { radius: 72, damage: 40, pierce: 40, dtype: 'BLAST', shipDamage: 120 }, src);
+        });
       }
     }
     sim.emit({ t: 'abilityFx', id: 'bombingrun', x: tower.x, y: tower.y, r: 160 });
@@ -203,9 +206,9 @@ export default {
       upgrades: [
         { name: 'Armor Piercing', cost: 350, desc: 'Drone rounds deal 2 extra damage to ships.',
           apply(s) { const w = gun(s); w.shipDamage = (w.shipDamage || 0) + 2; } },
-        { name: 'Explosive Rounds', cost: 700, desc: 'Rounds deal 1 more damage to ships and switch to BLAST damage, which can hit Iron and frozen meteors but not Magma.',
+        { name: 'Explosive Rounds', cost: 700, desc: 'Rounds deal 1 more damage to ships and switch to BLAST damage, which can hit Iron and frozen meteors but not Magma meteors or Geodes.',
           apply(s) { const w = gun(s); w.shipDamage = (w.shipDamage || 0) + 1; w.dtype = 'BLAST'; w.color = '#ffd08a'; main(s).dtype = 'BLAST'; } },
-        { name: 'Bomber Drones', cost: 2200, desc: 'Drones become bombers that fire pairs of homing BLAST missiles, each exploding for 5 damage across 55 units.',
+        { name: 'Bomber Drones', cost: 2200, desc: 'Drones become bombers that fire a pair of homing BLAST missiles every second, each hitting for 2 damage and exploding for 5 damage across 55 units.',
           apply(s) {
             const w = gun(s);
             main(s).dtype = 'BLAST';
@@ -215,13 +218,13 @@ export default {
             w.visual = 'missile'; w.color = '#ffb347';
             const b = bay(s); b.look = 'bomber'; b.droneColor = '#ff9f43';
           } },
-        { name: 'Heavy Bombers', cost: 7500, desc: 'A third bomber joins, and missiles reload 10% faster and deal 8 damage (20 to ships) in a wider blast.',
+        { name: 'Heavy Bombers', cost: 7500, desc: 'One more bomber joins, and missiles reload 11% faster and deal 8 damage (20 to ships) to up to 24 meteors in a wider blast.',
           apply(s) {
             const a = main(s), w = gun(s), sp = w.splash;
             a.count += 1; sp.damage += 3; sp.radius += 15; sp.pierce += 8; sp.shipDamage = (sp.shipDamage || 0) + 12;
             w.cooldown *= 0.9; w.projRadius = 9;
           } },
-        { name: 'Strike Wing', cost: 47000, desc: 'Four faster bombers fire 3-missile salvos, 33% faster, that deal 17 damage (85 to ships). Unlocks Bombing Run: the wing carpet-bombs the whole channel.',
+        { name: 'Strike Wing', cost: 47000, desc: 'One more bomber joins, bombers fly faster and fire 3-missile salvos, 33% faster, that deal 17 damage (85 to ships) to up to 40 meteors. Unlocks Bombing Run: the wing carpet-bombs the channel.',
           apply(s) {
             const a = main(s), w = gun(s), sp = w.splash;
             a.count += 1; a.droneSpeed += 80; w.count = 3; w.spread = 0.7; w.cooldown *= 0.75;
@@ -252,7 +255,7 @@ export default {
             a.count += 2; w.damage += 3;
             t.speed = 280; t.cap = 240; t.maxMass = Infinity; t.ships = true; t.shipSpeed = 45; t.shipCap = 150; t.shipSlow = 0.6; t.titanSlow = 1;
           } },
-        { name: 'Gravity Hauler', cost: 32000, desc: 'The four haulers get 10-damage rounds that fire 3 times as fast, hold ships at 40% speed, drag each one up to 600 units back up the channel and slow Storm Titans by 30%.',
+        { name: 'Gravity Hauler', cost: 32000, desc: 'The haulers get 10-damage rounds that pierce 5 meteors and fire 3 times as fast, hold ships at 40% speed, drag each one up to 600 units back up the channel and slow Storm Titans by 30%.',
           apply(s) {
             const a = main(s), w = gun(s), t = bay(s).tow;
             w.damage += 4; w.pierce += 2; w.cooldown /= 3;

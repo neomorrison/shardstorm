@@ -135,7 +135,7 @@ const blackHole = {
   icon: 'blackhole',
   cooldown: 60,
   duration: BH_TIME,
-  desc: 'Opens a black hole on the densest spot of the channel for 3 s: it destroys every meteor within 110 units and deals 2000 damage per second to ships (1000 to Storm Titans).',
+  desc: 'Opens a black hole on the densest spot of the channel for 3 s: it pulls meteors within 242 units on its channel into it and draws ships behind it forward (never Storm Titans), destroys every meteor within 110 units and deals 2,000 damage per second to ships (1,000 to Storm Titans).',
   activate(sim, tower) {
     const c = densestSpot(sim, BH_RADIUS);
     let x, y, lane, d;
@@ -269,7 +269,15 @@ function markUpdate(sim, t, a, dt) {
     if (d.ids.length) {
       const src = normSrc(a);
       const fx = a._markFx || (a._markFx = { expose: { t: 0.4, mult: a.mult } });
-      for (const id of d.ids) { const e = sim.getEnemy(id); if (e && !e.dead) sim.applyEffects(e, fx, src); }
+      const now = sim.state.time;
+      for (const id of d.ids) {
+        const e = sim.getEnemy(id);
+        if (!e || e.dead) continue;
+        sim.applyEffects(e, fx, src);
+        // The mark holds until just after the next re-pick (see lensTick). A weaker mark never
+        // extends a stronger one that is still live, so it cannot keep that bonus alive.
+        if (!(e._gmT > now) || a.mult >= e._gmM) { e._gmM = a.mult; e._gmT = now + MARK_TICK * 1.5; }
+      }
     }
   }
   if (!d.ids.length) return;
@@ -297,7 +305,27 @@ function mark(s) {
   return s.attacks.mark;
 }
 
-function stripPhantom(sim, t, e) { if (e.phantom) e.phantom = false; }
+// Lens fields (every Lens tier) run this on each enemy inside them, every tick, right after the
+// engine applied the field's own expose effect. The engine keeps one damage multiplier per enemy
+// (exposeMult) and only ever raises it while exposedT keeps being refreshed, and a Lens field
+// refreshes exposedT every tick. Without this, a meteor that lost its mark (or left a stronger
+// Lens field for a weaker one) would keep the higher multiplier for as long as it stayed in a
+// field. So the multiplier is re-derived here from what is active right now: the strongest Lens
+// field covering the enemy (this tick or the last one, so tower update order never lowers it
+// mid-tick) and a live mark (e._gmT / e._gmM, set by markUpdate). Quantum Lens also strips Phantom.
+function lensTick(sim, t, e, a) {
+  const ex = a.expose;
+  const fm = ex && typeof ex === 'object' ? (ex.mult || 1) : 1;
+  const tick = sim.state.tick;
+  if (e._gfTick !== tick) {
+    e._gfPrev = e._gfTick === tick - 1 ? e._gfM : 1;
+    e._gfTick = tick; e._gfM = fm;
+  } else if (fm > e._gfM) e._gfM = fm;
+  let m = e._gfM > e._gfPrev ? e._gfM : e._gfPrev;
+  if (e._gmT > sim.state.time && e._gmM > m) m = e._gmM;
+  if (e.exposedT > 0) e.exposeMult = m;
+  if (a.stripPhantom && e.phantom) e.phantom = false;
+}
 
 // ------------------------------------------------------------------------------------------
 // Tower definition
@@ -310,7 +338,7 @@ export default {
   cost: 400,
   radius: 22,
   blurb: 'Slows everything in its field.',
-  desc: 'Bends gravity so meteors in its field move 40% slower (ships 15% slower, Storm Titans half as much as ships). Deals no damage until upgraded.',
+  desc: 'Bends gravity so meteors in its field move 40% slower (ships 15% slower, Storm Titans half as much as ships). Deals no damage on its own; only the Crusher path adds damage.',
   art: {
     sprite: 'tower_gravity', rotates: false, color: '#a78bfa', accent: '#e0c3ff', shape: 'circle', barrels: 0,
     variant(levels) { return levels[0] >= 3 ? 1 : levels[1] >= 3 ? 2 : levels[2] >= 3 ? 3 : 0; },
@@ -344,14 +372,14 @@ export default {
             const im = implode(s); im.damage = 2; im.shipDamage = 6; im.cooldown = 2.5; im.pierce = 16;
             field(s).color = '#d45dff';
           } },
-        { name: 'Neutron Core', cost: 5200, desc: 'Crushing deals 3 per second to 12 meteors, implosions deal 4 (16 to ships) every 1.5 s, and both now hurt Prism.',
+        { name: 'Neutron Core', cost: 5200, desc: 'Crushing deals 3 per second to 12 meteors, implosions deal 4 (16 to ships) to up to 24 meteors every 1.5 s, and both now hurt Prism.',
           apply(s) {
             const c = crush(s); c.dps = 3; c.max = 12; c.bypass = [...(c.bypass || []), 'prism'];
             const im = implode(s); im.damage = 4; im.shipDamage = 12; im.cooldown = 1.5; im.pierce = 24;
             im.bypass = [...(im.bypass || []), 'prism'];
             field(s).color = '#e04dff';
           } },
-        { name: 'Event Horizon', cost: 26000, desc: 'Crushing turns VOID and hits everything for 10 per second, implosions deal 16 (80 to ships) every 1 s, the field grows 30 wider, and Black Hole unlocks.',
+        { name: 'Event Horizon', cost: 26000, desc: 'Crushing turns VOID and hits up to 30 of anything for 10 per second, VOID implosions deal 16 (80 to ships) to up to 50 targets every 1 s, the field grows 30 wider, and Black Hole unlocks.',
           apply(s) {
             const c = crush(s); c.dps = 10; c.max = 30; c.dtype = 'VOID';
             const im = implode(s); im.damage = 16; im.shipDamage = 64; im.cooldown = 1; im.pierce = 50; im.dtype = 'VOID'; im.color = '#b86bff';
@@ -364,23 +392,23 @@ export default {
     {
       name: 'Undertow',
       upgrades: [
-        { name: 'Reverse Drift', cost: 220, desc: 'The field pulls meteors back 30 units per second, up to 100 units each.',
+        { name: 'Reverse Drift', cost: 220, desc: 'The field pulls meteors back at up to 30 units per second (slower as each nears its limit), at most 100 units each.',
           apply(s) { const w = tide(s); w.pull = 30; w.cap = 100; } },
-        { name: 'Deep Current', cost: 420, desc: 'Pulls meteors back 50 units per second (up to 160 each), and the field is 15 wider.',
+        { name: 'Deep Current', cost: 420, desc: 'Pulls meteors back at up to 50 units per second (at most 160 each), and the field is 15 wider.',
           apply(s) { const w = tide(s); w.pull = 50; w.cap = 160; s.range += 15; } },
         { name: 'Riptide Surge', cost: 1400, desc: 'Every 3 s a surge knocks meteors in the field 60 units back; pull rises to 70 per second, up to 260 each.',
           apply(s) {
             const w = tide(s); w.pull = 70; w.cap = 260; w.surge = 60; w.surgeEvery = 3;
             field(s).color = '#4de8e0';
           } },
-        { name: 'Tidal Lock', cost: 4800, desc: 'Drags ships back 14 units per second (up to 120 each, never Storm Titans) and slows them 25% (Titans half as much); meteor pull rises to 100.',
+        { name: 'Tidal Lock', cost: 4800, desc: 'Drags ships back 14 units per second (up to 120 each, never Storm Titans) and slows them 25% (Titans half as much); meteor pull rises to 100 per second (up to 360 each) and surges knock meteors 80 back (ships 25).',
           apply(s) {
             const w = tide(s); w.pull = 100; w.cap = 360; w.surge = 80;
             w.shipPull = 14; w.shipCap = 120; w.shipSurge = 25;
             field(s).slow.shipMult = 0.75;
             field(s).color = '#2fd6ff';
           } },
-        { name: 'Rewind Field', cost: 22000, desc: 'Every 2.5 s the field rewinds meteors 180 units (ships 70); it grows 35 wider, slows meteors 55% (ships 35%) and pulls up to 700 units each.',
+        { name: 'Rewind Field', cost: 22000, desc: 'Every 2.5 s the field rewinds meteors 180 units (ships 70); it grows 35 wider, slows meteors 55% (ships 35%) and pulls at up to 160 units per second (ships 30), at most 700 units each (ships 320).',
           apply(s) {
             const w = tide(s); w.pull = 160; w.cap = 700; w.surge = 180; w.surgeEvery = 2.5;
             w.shipPull = 30; w.shipCap = 320; w.shipSurge = 70;
@@ -393,10 +421,10 @@ export default {
       name: 'Lens',
       upgrades: [
         { name: 'Scanner Lens', cost: 200, desc: 'Meteors in the field lose Phantom cover, so every tower can target them there.',
-          apply(s) { field(s).expose = { mult: 1 }; } },
+          apply(s) { const f = field(s); f.expose = { mult: 1 }; f.onTick = lensTick; } },
         { name: 'Stress Lens', cost: 380, desc: 'Meteors in the field take 15% more damage from every source, and the field is 10 wider.',
           apply(s) { const f = field(s); f.expose = { mult: 1.15 }; s.range += 10; } },
-        { name: 'Focal Beam', cost: 1400, desc: 'A focusing beam marks the strongest target in the field to take 50% more damage; the field amplifies damage by 20%.',
+        { name: 'Focal Beam', cost: 1400, desc: 'A focusing beam marks the target the targeting mode picks in the field (the strongest by default) to take 50% more damage while marked; the field amplifies damage by 20%.',
           apply(s) {
             const f = field(s); f.expose = { mult: 1.2 }; f.color = '#ffd166';
             const m = mark(s); m.beams = 1; m.mult = 1.5;
@@ -408,7 +436,7 @@ export default {
           } },
         { name: 'Quantum Lens', cost: 20000, desc: 'The field grows 40 wider, amplifies damage by 50% and strips Phantom for good; 4 beams mark targets for double damage.',
           apply(s) {
-            const f = field(s); f.expose = { mult: 1.5 }; f.onTick = stripPhantom; f.color = '#ffc940';
+            const f = field(s); f.expose = { mult: 1.5 }; f.stripPhantom = true; f.color = '#ffc940';
             const m = mark(s); m.beams = 4; m.mult = 2; m.width = 5; m.color = '#fff3b0';
             s.range += 40;
           } },

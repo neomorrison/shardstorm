@@ -10,7 +10,10 @@ import { payWaveIncome } from '../src/sim/economy.js';
 import { Path } from '../src/sim/path.js';
 import { Rng } from '../src/core/rng.js';
 import { buildWave } from '../src/sim/wavegen.js';
-import { MAW_SPIT_EVERY } from '../src/sim/enemies.js';
+import { MAW_SPIT_EVERY, mawSpitType } from '../src/sim/enemies.js';
+import { EVENT_CAP } from '../src/sim/game.js';
+import { computeBaseStats, finalizeStats } from '../src/sim/towers.js';
+import { titanHp } from '../src/data/economy.js';
 
 const verbose = process.argv.includes('--verbose');
 let passed = 0, failed = 0;
@@ -912,6 +915,255 @@ section('long run sanity (solid-ish play to wave 60, no NaN)', () => {
   const bad = findNaN(sim.state);
   ok(!bad, 'no NaN anywhere' + (bad ? ': ' + bad : ''));
   void orig;
+});
+
+section('QA regressions (engine, 2026-09 review)', () => {
+  const SRCV = { dtype: 'VOID' };
+  // engine-logic-01: nanite regrow climbs exactly one grade through the family tree
+  const grow = (type, origType) => {
+    const s = newSim();
+    const e = s.spawnEnemy(type, { d: 300, nanite: true, origType });
+    e.speedMult = 0.0001;
+    for (let i = 0; i < Math.round(3.05 / TICK); i++) s.step();
+    return e.type;
+  };
+  eq(grow('rose', 'obsidian'), 'magma', 'nanite Rose in an Obsidian family regrows one grade (Magma)');
+  eq(grow('magma', 'obsidian'), 'geode', 'nanite Magma regrows into Geode');
+  eq(grow('comet', 'obsidian'), 'geode', 'nanite Comet regrows into Geode');
+  eq(grow('geode', 'obsidian'), 'aurora', 'nanite Geode regrows into Aurora');
+  eq(grow('aurora', 'obsidian'), 'obsidian', 'nanite Aurora regrows into Obsidian');
+  eq(grow('rust', 'obsidian'), 'cobalt', 'nanite Rust in a special family climbs the Rust chain first');
+  eq(grow('rose', 'prism'), 'prism', 'nanite Rose of a Prism family regrows into Prism');
+  {
+    // a Specter's nanite Obsidian cargo: a Rose shard left alone regrows to Magma, not Obsidian
+    const s = newSim();
+    const e = s.spawnEnemy('rose', { d: 300, nanite: true, origType: 'obsidian', phantom: true });
+    e.speedMult = 0.0001;
+    for (let i = 0; i < Math.round(3.05 / TICK); i++) s.step();
+    ok(e.type === 'magma' && e.owed === ENEMIES.rose.shells, 'regrown shell keeps paying only for the shells it had');
+  }
+
+  // engine-logic-02: CRYO slows never pass to CRYO-immune children; ship slows stay on ships
+  {
+    const s = newSim();
+    const a = s.spawnEnemy('aurora', { d: 500 });
+    s.applyEffects(a, { slow: { mult: 0.5, t: 3 } }, { dtype: 'CRYO' });
+    s.damage(a, 1, 'VOID', SRCV);
+    const kids = s.state.enemies.filter((e) => !e.dead && e.type === 'geode');
+    ok(kids.length === 2 && kids.every((k) => k.slowMult === 1), 'CRYO slow on an Aurora does not pass to its Geodes');
+    const s2 = newSim();
+    const a2 = s2.spawnEnemy('aurora', { d: 500 });
+    s2.applyEffects(a2, { slow: { mult: 0.5, t: 3 } }, { dtype: 'ENERGY' });
+    s2.damage(a2, 1, 'VOID', SRCV);
+    ok(s2.state.enemies.filter((e) => !e.dead && e.type === 'geode').every((k) => k.slowMult === 0.5), 'a non-CRYO slow still passes down');
+    const s3 = newSim();
+    const h = s3.spawnEnemy('hauler', { d: 500 });
+    s3.applyEffects(h, { slow: { mult: 0.9, shipMult: 0.25, t: 3 } }, { dtype: 'CRYO' });
+    s3.damage(h, 1e6, 'VOID', SRCV);
+    ok(s3.state.enemies.filter((e) => !e.dead).every((k) => k.slowMult === 1), 'a ship-strength slow does not pass to meteor cargo');
+  }
+
+  // engine-logic-03: a hit the Aegis shield absorbs in full never applies on-hit effects
+  {
+    const fx = { stun: { t: 1, shipT: 1 }, slow: { mult: 0.5, shipMult: 0.5, t: 2 }, burn: { dps: 5, t: 2 } };
+    let leaks = 0;
+    for (const d of [0.3, 0.7, 1, 2.1, 43, 81, 86, 91, 0.1 * 3]) {
+      const s = newSim();
+      const t = s.spawnEnemy('titan', { d: 400, titan: { kind: 'aegis', tier: 2, hp: 10000 } });
+      s.damage(t, d, 'KINETIC', { dtype: 'KINETIC' }, { onHit: fx });
+      if (t.stunT > 0 || t.slowMult < 1 || t.burn || t.hp !== t.maxHp) leaks++;
+    }
+    eq(leaks, 0, 'fully absorbed KINETIC hits on the Aegis leave hull and statuses untouched');
+    const s = newSim();
+    const t = s.spawnEnemy('titan', { d: 400, titan: { kind: 'aegis', tier: 2, hp: 10000 } });
+    s.damage(t, 2500 + 10, 'VOID', SRCV, { onHit: fx });
+    ok(t.titan.shield === 0 && Math.abs(t.hp - 9990) < 1e-6 && t.slowMult < 1, 'a hit that breaks through reaches the hull and applies its effects');
+  }
+
+  // engine-logic-04: a 1 s burn deals its full dps x t
+  for (const bt of [0.5, 1, 1.5, 2]) {
+    const s = newSim();
+    const e = s.spawnEnemy('obsidian', { d: 400 });
+    e.speedMult = 0.0001;
+    s.applyEffects(e, { burn: { dps: 4, t: bt } }, { dtype: 'THERMAL' });
+    for (let i = 0; i < Math.round((bt + 1) / TICK); i++) s.step();
+    near(e.maxHp - e.hp, 4 * bt, `a ${bt} s burn deals dps x t`);
+  }
+
+  // engine-logic-05: children spawned mid-tick are visible to the same tick's area queries
+  {
+    const s = newSim();
+    const r = s.spawnEnemy('rose', { d: 800 });
+    r.speedMult = 0.0001;
+    s.step();
+    s.damage(r, 1, 'BLAST', { dtype: 'BLAST' });
+    const kid = s.state.enemies.find((e) => !e.dead);
+    s.explode(kid.x, kid.y, { radius: 80, damage: 5, pierce: 40, dtype: 'BLAST' });
+    ok(kid.dead, 'an explosion in the same tick reaches the children of the shell it just popped');
+    // a knocked-back enemy is found at its new spot and only once
+    const s2 = newSim();
+    const e2 = s2.spawnEnemy('obsidian', { d: 900 });
+    e2.speedMult = 0.0001;
+    s2.step();
+    s2.applyEffects(e2, { knockback: { dist: 300 } }, { dtype: 'KINETIC' });
+    const found = s2.enemiesInRange(e2.x, e2.y, 5);
+    eq(found.filter((x) => x === e2).length, 1, 'a knocked-back enemy is filed once at its new position');
+  }
+
+  // engine-logic-06: exact-damage hits break the shell (no 1e-16 HP sliver)
+  for (const [type, per, n] of [['rust', 0.1, 10], ['rust', 0.2, 5], ['rust', 1 / 3, 3], ['obsidian', 0.1, 100]]) {
+    const s = newSim();
+    const e = s.spawnEnemy(type, { d: 400 });
+    let hits = 0;
+    while (e.type === type && !e.dead && hits < n + 5) { s.damage(e, per, 'VOID', SRCV); hits++; }
+    eq(hits, n, `${type} breaks after ${n} hits of ${per.toFixed(3)}`);
+  }
+
+  // engine-logic-07: the sell breakdown adds up and the undo flags agree
+  {
+    const s = newSim(); s.state.cash = 1e5;
+    const id = place(s, 'pulse');
+    s.startWave(); for (let i = 0; i < 5; i++) s.step();
+    let n = 0; while (s.state.phase === 'wave' && n++ < 60 * 600) s.step();
+    s.upgrade(id, 0);
+    const info = s.towerInfo(id), parts = s.sellParts(id), t = s.getTower(id);
+    eq(parts.undo + parts.refund70 + parts.vault, s.sellValue(id), 'sellParts adds up to sellValue');
+    eq(info.sellParts.total, info.sellValue, 'towerInfo carries the same breakdown');
+    ok(parts.undo === t.undoPaid && parts.undo > 0 && parts.refund70 === Math.floor((t.paid - t.undoPaid) * SELL_RATE + 1e-9), 'this build phase\'s upgrade refunds in full, the rest at 70%');
+    ok(info.undoable === t.undoable && info.undoable === false && info.partialUndo === true, 'towerInfo.undoable matches tower.undoable; partialUndo flags the upgrade refund');
+  }
+
+  // engine-logic-08: brittle merging keeps the best of each field and every brittle's own timer
+  {
+    const railBr = { add: 3, mult: 1, t: 3 }, cryoBr = { add: 2, mult: 1.5, t: 3 };
+    const dealt = [];
+    for (const order of [[railBr, cryoBr], [cryoBr, railBr]]) {
+      const s = newSim();
+      const e = s.spawnEnemy('obsidian', { d: 500 });
+      for (const b of order) s.applyEffects(e, { brittle: b }, { dtype: 'CRYO' });
+      const hp0 = e.hp; s.damage(e, 1, 'VOID', SRCV); dealt.push(hp0 - e.hp);
+    }
+    ok(dealt[0] === dealt[1] && Math.abs(dealt[0] - 6) < 1e-9, 'brittle outcome does not depend on hit order: ' + dealt.join(' / '));
+    const s = newSim();
+    const e = s.spawnEnemy('obsidian', { d: 500 });
+    e.speedMult = 0.0001;
+    s.applyEffects(e, { brittle: { add: 3, mult: 2, t: 0.5 } }, { dtype: 'CRYO' });
+    s.applyEffects(e, { brittle: { add: 1, mult: 1, t: 6 } }, { dtype: 'CRYO' });
+    for (let i = 0; i < Math.round(1 / TICK); i++) s.step();
+    ok(e.brittle && e.brittle.add === 1 && e.brittle.mult === 1, 'a strong short brittle expires on time under a weak long one');
+    for (let i = 0; i < Math.round(5.2 / TICK); i++) s.step();
+    ok(e.brittle === null, 'brittle clears when its last entry expires');
+  }
+
+  // engine-logic-09: the Rift never blinks backward
+  {
+    const s = newSim();
+    const L = s.pathLength(0);
+    const rift = s.spawnEnemy('titan', { d: L - 60, titan: { kind: 'rift', tier: 3, hp: 10000 } });
+    rift.speedMult = 0.0001;
+    const d0 = rift.d;
+    s.damage(rift, 2600, 'VOID', SRCV);
+    s.step();
+    ok(rift.d >= d0 && rift.titan.blinks === 1, 'a Rift near the Core does not move back when it blinks');
+  }
+
+  // engine-logic-10: the Maw's spit grade rises every appearance
+  eq([1, 4, 7, 10, 13, 16].map(mawSpitType).join(','), 'rose,iron,geode,aurora,obsidian,obsidian', 'Maw spit ladder by appearance');
+  {
+    const s = newSim();
+    const m = s.spawnEnemy('titan', { d: 100, titan: { kind: 'maw', tier: 4, hp: 1e6 } });
+    eq(m.titan.spitType, 'iron', 'the wave 80 Maw spits Iron');
+  }
+
+  // engine-logic-11: Titan hulls stay finite at any tier
+  {
+    let bad = null;
+    for (let t = 1; t <= 150; t++) { const hp = titanHp(t); if (!Number.isFinite(hp) || hp < 100) { bad = t; break; } }
+    ok(bad === null, 'titanHp is finite for tiers 1..150' + (bad ? ' (tier ' + bad + ')' : ''));
+    const spec = buildWave(1240, { lanes: 1 });
+    ok(spec.titan && Number.isFinite(spec.titan.hp), 'wave 1240 Titan hull is finite');
+  }
+
+  // engine-logic-12: no Commander can be placed when none was chosen
+  {
+    const s = newSim(); s.state.cash = 1e5;
+    const hero = Object.keys(HEROES)[0];
+    const sp = spots(s, 'pulse')[0];
+    const r = s.canPlace(hero, sp[0], sp[1]);
+    ok(!r.ok && /No Commander/.test(r.reason), 'canPlace refuses a Commander in a match without one');
+  }
+
+  // ui-desktop-4: auto-start only fires after a wave is cleared in this session
+  {
+    const s = newSim(); s.setAutoStart(true);
+    for (let i = 0; i < Math.round(5 / TICK); i++) s.step();
+    eq(s.state.wave, 0, 'auto-start does not launch wave 1 of a new run');
+    place(s, 'pulse'); place(s, 'pulse', 5);
+    s.startWave();
+    let n = 0; while (s.state.phase === 'wave' && n++ < 60 * 600) s.step();
+    const save = JSON.parse(JSON.stringify(s.serialize()));
+    for (let i = 0; i < Math.round(1.2 / TICK); i++) s.step();
+    eq(s.state.wave, 2, 'auto-start launches the next wave after a clear');
+    const B = Sim.fromSave(save);
+    for (let i = 0; i < Math.round(5 / TICK); i++) B.step();
+    ok(B.state.autoStart && B.state.wave === 1 && B.state.phase === 'build', 'auto-start stays idle right after a save is restored');
+  }
+
+  // RP-2: invalid saves are rejected cleanly
+  {
+    const s = newSim(); s.state.cash = 1e5; place(s, 'pulse');
+    const good = JSON.parse(JSON.stringify(s.serialize()));
+    eq(Sim.validateSave(good), null, 'a real save validates');
+    const mut = (f) => { const c = JSON.parse(JSON.stringify(good)); f(c); return c; };
+    const bad = {
+      empty: {}, nullSave: null, noCash: mut((c) => { delete c.cash; }), cashStr: mut((c) => { c.cash = '500'; }),
+      livesZero: mut((c) => { c.lives = 0; }), waveStr: mut((c) => { c.wave = '12'; }), future: mut((c) => { c.v = 99; }),
+      unknownTower: mut((c) => { c.towers[0].type = 'nuke'; }), paidMissing: mut((c) => { delete c.towers[0].paid; }),
+      levels9: mut((c) => { c.towers[0].levels = [9, 0, 0]; }), crosspath: mut((c) => { c.towers[0].levels = [3, 3, 0]; }),
+      nanPos: mut((c) => { c.towers[0].x = null; }), badMap: mut((c) => { c.mapId = 'nowhere'; }),
+    };
+    const accepted = [];
+    for (const [k, v] of Object.entries(bad)) {
+      let threw = false;
+      try { Sim.fromSave(v); } catch (e) { threw = /Invalid save/.test(e.message) || k === 'badMap'; }
+      if (!threw || Sim.validateSave(v) === null) accepted.push(k);
+    }
+    eq(accepted.join(','), '', 'every invalid save is rejected with an Invalid save error');
+  }
+
+  // RP-5: the event cap never drops critical events
+  {
+    const s = newSim();
+    s.emit({ t: 'waveCleared', wave: 1 });
+    for (let i = 0; i < EVENT_CAP * 2; i++) s.emit({ t: 'pop', x: 0, y: 0 });
+    s.emit({ t: 'titanDown', wave: 1 });
+    const evs = s.drainEvents();
+    ok(evs.length <= EVENT_CAP && evs[0].t === 'waveCleared' && evs[evs.length - 1].t === 'titanDown', 'critical events survive the cap, cosmetic ones are trimmed');
+  }
+
+  // RP-6 and RP-11: drones hash and look the same after a load
+  {
+    const s = newSim(); s.state.cash = 1e6;
+    const a = place(s, 'drone');
+    const b = place(s, 'drone', 8);
+    s.upgrade(b, 0); s.upgrade(a, 2); s.upgrade(a, 2); s.upgrade(a, 2); s.upgrade(a, 2);
+    s.startWave();
+    let n = 0; while (s.state.phase === 'wave' && n++ < 60 * 600) s.step();
+    s.upgrade(a, 0);
+    const save = JSON.parse(JSON.stringify(s.serialize()));
+    const B = Sim.fromSave(save);
+    eq(B.hash(), s.hash(), 'hash ignores drone array order after a load');
+    const looks = (sim) => sim.state.drones.filter((d) => d.towerId === a).map((d) => d.visual + '/' + d.color).sort().join(',');
+    eq(looks(B), looks(s), 'restored drones keep the Drone Bay look');
+  }
+
+  // beacon-pierce-buff-kind-whitelist: aura pierce raises a mortar blast's pierce
+  {
+    const base = computeBaseStats(TOWERS.mortar, [0, 0, 0]);
+    const plain = finalizeStats(base, null).attacks.main.splash.pierce;
+    const buffed = finalizeStats(base, { rateMult: 1, rangeMult: 1, pierceAdd: 2, damageAdd: 0, detection: false, bypass: [], discount: 0, shipDamageAdd: 0 }).attacks.main.splash.pierce;
+    eq(buffed, plain + 2, 'aura pierceAdd applies to mortar splash pierce');
+  }
 });
 
 console.log(`\n${passed} passed, ${failed} failed`);

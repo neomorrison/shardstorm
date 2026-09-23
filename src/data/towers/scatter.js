@@ -130,7 +130,7 @@ const maelstrom = {
   icon: 'maelstrom',
   cooldown: 45,
   duration: 6,
-  desc: 'The blade ring flies out to 210 units and the pod attacks twice as fast for 6 s.',
+  desc: 'The blade rings fly out as far as 210 units and the pod attacks twice as fast for 6 s.',
   activate(sim, tower) {
     const now = sim.state.time;
     tower.data._field_mael = { t0: now, until: now + 6 };
@@ -194,9 +194,9 @@ export default {
       upgrades: [
         { name: 'Spin Up', cost: 150, desc: 'Fires 25% faster.',
           apply(s) { main(s).cooldown *= 0.8; } },
-        { name: 'Twelve Point', cost: 260, desc: 'Fires 12 shards per volley, 10% faster.',
+        { name: 'Twelve Point', cost: 260, desc: 'Fires 12 shards per volley, 11% faster.',
           apply(s) { const a = main(s); a.count += 4; a.cooldown *= 0.9; } },
-        { name: 'Blade Ring', cost: 1000, desc: 'Three spinning blades circle the pod and slice every meteor they touch, and shards pierce 1 more meteor.',
+        { name: 'Blade Ring', cost: 1000, desc: 'Three spinning blades circle the pod, each slicing up to 4 meteors per lap for 1 damage (then dull until the next lap), and shards pierce 1 more meteor.',
           apply(s) {
             const a = main(s);
             a.pierce += 1; a.visual = 'blade'; a.color = BLADE;
@@ -206,7 +206,7 @@ export default {
               visual: 'blade', color: BLADE, update: updateBlades,
             };
           } },
-        { name: 'Razor Halo', cost: 3800, desc: 'Five blades spin 40% faster and deal 2 damage, shards pierce 1 more meteor, and blades and shards now cut frozen meteors.',
+        { name: 'Razor Halo', cost: 3800, desc: 'Five blades spin 40% faster and slice up to 6 meteors per lap for 2 damage, shards pierce 1 more meteor, and blades and shards now cut frozen meteors.',
           apply(s) {
             const a = main(s), b = s.attacks.blades;
             b.blades = 5; b.spin *= 1.4; b.damage += 1; b.cuts = 6; b.bladeRadius = 13;
@@ -214,7 +214,7 @@ export default {
             a.bypass = [...(a.bypass || []), 'FROZEN'];
             a.pierce += 1;
           } },
-        { name: 'Maelstrom', cost: 17000, desc: 'Ten blades in two rings deal 5 damage (10 to ships), and the pod fires 20 shards per volley 25% faster that deal 2 damage (4 to ships). Unlocks Maelstrom: the blades fly out to 210 units for 6 s.',
+        { name: 'Maelstrom', cost: 17000, desc: 'Ten blades in two rings slice up to 10 meteors per lap for 5 damage (10 to ships), and the pod fires 20 shards per volley 25% faster that deal 2 damage (4 to ships) and pierce 1 more meteor. Unlocks Maelstrom: the blade rings fly out as far as 210 units for 6 s.',
           apply(s) {
             const a = main(s), b = s.attacks.blades;
             b.blades = 10; b.rings = 2; b.cuts = 10; b.damage += 3; b.shipDamage = (b.shipDamage || 0) + 5; b.bladeRadius = 14; b.scale = 0.8;
@@ -234,7 +234,7 @@ export default {
             a.dtype = 'THERMAL'; a.color = FIRE; a.visual = 'ember';
             a.onHit = { ...(a.onHit || {}), burn: { dps: 1, t: 1.5 } };
           } },
-        { name: 'Ring of Fire', cost: 1500, desc: 'Fires a THERMAL ring of fire that hits up to 20 meteors in range for 1 damage and burns them, including Iron and frozen ones (never Prism).',
+        { name: 'Ring of Fire', cost: 1500, desc: 'Fires a THERMAL ring of fire that hits up to 20 meteors in range for 1 damage and burns them for 1 per second over 1.5 s, including Iron and frozen ones (never Prism).',
           apply(s) {
             const a = main(s);
             a.kind = 'pulse'; a.dtype = 'THERMAL'; a.damage = 1; a.pierce = 20;
@@ -242,14 +242,14 @@ export default {
             a.onHit = { ...(a.onHit || {}), burn: { dps: 1, t: 1.5 } };
             delete a.radial; delete a.count; delete a.split; delete a.splitOn; delete a.lifetime;
           } },
-        { name: 'Inferno Core', cost: 3200, desc: 'The ring pulses 40% faster, reaches 25 units farther and hits up to 40 meteors for 4 damage (12 to ships), burning 2 per second.',
+        { name: 'Inferno Core', cost: 3200, desc: 'The ring pulses 40% faster, reaches 25 units farther and hits up to 40 meteors for 4 damage (12 to ships), burning 2 per second for 2.5 s.',
           apply(s) {
             const a = main(s);
             s.range += 25; a.damage += 3; a.pierce = 40; a.shipDamage = (a.shipDamage || 0) + 8;
             a.cooldown /= 1.4; a.color = '#ff6a2a';
             a.onHit = { ...(a.onHit || {}), burn: { dps: 2, t: 2.5 } };
           } },
-        { name: 'Solar Flare', cost: 20000, desc: 'Solar flares 45 units wider pulse 70% faster, hit up to 120 targets for 6 damage (200 to ships) and burn 6 per second, stacking up to 30 on anything that stays inside.',
+        { name: 'Solar Flare', cost: 20000, desc: 'Solar flares 45 units wider pulse 70% faster, hit up to 120 targets for 6 damage (200 to ships) and burn 6 per second for 3 s, growing by 3 every 0.5 s up to 30 per second on anything that stays inside.',
           apply(s) {
             const a = main(s);
             s.range += 45; a.damage += 2; a.pierce = 120; a.shipDamage = (a.shipDamage || 0) + 186;
@@ -293,7 +293,7 @@ export default {
             sp.splitOn = 'hit';
             syncSplits(a);
           } },
-        { name: 'Shatterstorm', cost: 13000, desc: 'Fires 4 more crystals 2.5 times as fast with 15 more range, and every shard deals 3 damage (8 to ships) and splits three generations deep.',
+        { name: 'Shatterstorm', cost: 13000, desc: 'Fires 4 more crystals 2.5 times as fast with 15 more range, each crystal bursts into 4 splinters, and every shard deals 3 damage (8 to ships) and splits three generations deep.',
           apply(s) {
             const a = main(s);
             s.range += 15;

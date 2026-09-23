@@ -56,11 +56,17 @@ export function upgradePrice(sim, tower, cost) {
 }
 
 // 70% of what was paid, except purchases made during the current build phase (undo: 100%).
-// A Rig's banked vault balance is paid out as well.
-export function sellValue(sim, t) {
+// That covers a tower bought this build phase (all of `paid`) and upgrades bought this build
+// phase on an older tower (only those upgrades). A Rig's banked vault balance is paid out as well.
+export function sellParts(sim, t) {
   const undo = Math.min(t.undoPaid, t.paid);
-  const v = undo + Math.floor((t.paid - undo) * SELL_RATE + 1e-9);
-  return v + Math.floor((t.data.vault || 0) + 1e-9);
+  const refund70 = Math.floor((t.paid - undo) * SELL_RATE + 1e-9);
+  const vault = Math.floor((t.data.vault || 0) + 1e-9);
+  return { undo, refund70, vault, total: undo + refund70 + vault };
+}
+
+export function sellValue(sim, t) {
+  return sellParts(sim, t).total;
 }
 
 function payout(sim, t, amount, reason) {

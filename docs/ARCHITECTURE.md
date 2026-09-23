@@ -87,7 +87,8 @@ sim.map        // map def plus sim.paths: Path[]
   wave, hullMult, speedMult,
   phantom, nanite, plated, origType,
   regrowT,                       // seconds since last damage (nanite)
-  slowMult, slowT, frozenT, stunT, burn: [{ dps, t, src }], brittle: { add, mult, t }, exposedT,
+  slowMult, slowT, slowDtype,    // slowDtype: damage type of the slow in force (CRYO slows skip CRYO-immune children)
+  frozenT, stunT, burn: [{ dps, t, src }], brittle: { add, mult, t }, exposedT,   // brittle: the merged brittle in force (5.5)
   immuneProj,                    // id of the projectile that killed the parent (children ignore it)
   titan: null | { kind, shield, maxShield, ... },
   dead }
@@ -101,7 +102,8 @@ sim.map        // map def plus sim.paths: Path[]
   aim: { x, y } | null,          // mortar ground target
   stats,                         // computed (section 5), includes buffs
   paid,                          // credits actually paid (for sell)
-  undoable,                      // bought this build phase, full refund
+  undoPaid,                      // credits spent on it this build phase (refunded in full on sale)
+  undoable,                      // everything paid was spent this build phase: selling is a full refund
   pops, damage, cashEarned,
   cd: { [attackKey]: secondsUntilReady },
   abilityCd: { [abilityId]: secondsUntilReady },
@@ -118,12 +120,12 @@ sim.map        // map def plus sim.paths: Path[]
 
 ### Drone
 ```js
-{ id, towerId, x, y, angle, targetId, cd, visual, kind }
+{ id, towerId, x, y, angle, targetId, cd, visual, kind, idx, key, color, towing }   // towing: a tractor beam is active this tick (false at rest)
 ```
 
 ## 4. Events
 
-`sim.events` is an array; consumers call `sim.drainEvents()` once per frame (returns the array and clears it). If nobody drains, the array is capped at 4000 (oldest dropped). Every event has `t` (type):
+`sim.events` is an array; consumers call `sim.drainEvents()` once per frame (returns the array and clears it). The buffer is capped at `EVENT_CAP` (4000): when it overflows, the oldest **cosmetic** events are dropped until 3500 remain. Critical events (`CRITICAL_EVENTS` in `src/sim/game.js`: `waveStart`, `waveCleared`, `titan`, `titanDown`, `gameOver`, `leak`, `place`, `upgrade`, `sell`, `ability`, `heroLevel`) are never dropped, so autosave, banners, records and the Titan bar survive a heavy 12-step frame at 3x. Every event has `t` (type):
 
 | t | fields | used by |
 |---|---|---|
@@ -207,14 +209,15 @@ Common fields on every attack: `kind, cooldown, dtype, damage, pierce, range (op
 
 ### 5.4 Buffs (Command Beacon and Commanders)
 `stats.aura = { radius, rateMult, rangeMult, pierceAdd, damageAdd, detection, bypass: [], discount, shipDamageAdd }`. Every tower whose center is inside the radius gets the best value of each field among covering auras (no stacking of the same field across beacons). Buffed attack cooldown = cooldown / rateMult. Rigs and Beacons never receive discounts.
+`pierceAdd` raises the pierce of projectile, hitscan and pulse attacks, and the splash pierce of mortar shells (the blast hits that many more meteors). Beams, chains and fields have no pierce, so it does not change them; a drone's weapon is buffed like any attack (through `atk.weapon`).
 
 ### 5.5 On-hit effects
 `onHit: { slow: { mult, t, shipMult }, freeze: { t }, burn: { dps, t }, stun: { t, shipT }, brittle: { add, mult, t }, knockback: { dist, shipDist }, expose: { t }, strip: true }`
-- `slow`: strongest slow wins (lowest mult); ships use `shipMult` (default: no slow). Comets ignore CRYO slows.
+- `slow`: strongest slow wins (lowest mult); ships use `shipMult` (default: no slow). Comets and Geodes ignore CRYO slows. Children inherit their parent's slow only when they are the same kind (meteor to meteor, ship to ship) and never a CRYO slow onto a CRYO-immune child.
 - `freeze`: meteors stop; frozen targets cannot be damaged by KINETIC unless the attack bypasses `FROZEN`. Ships cannot be frozen (convert to a 0.6 slow). Comets cannot be frozen.
-- `burn`: THERMAL damage over time, ticks every 0.5 s. Prism ignores it.
+- `burn`: THERMAL damage over time, ticks every 0.5 s, so a burn of `t` seconds deals `dps x 0.5` on each of `floor(t / 0.5)` ticks (a 1 s burn ticks twice). One burn per source tower; a new one keeps the higher dps and the longer time. Prism ignores it.
 - `stun`: stops movement; ships use `shipT` (default 0, halved on Titans). A ship stun never extends one already running, and a ship cannot be stunned again for `SHIP_STUN_IMMUNE` (1 s) after a stun ends.
-- `brittle`: damage taken `(dmg + add) x mult` for `t` seconds.
+- `brittle`: damage taken `(dmg + add) x mult` for `t` seconds. Each distinct brittle keeps its own timer; the brittle in force uses the best `add` and the best `mult` among the active ones (like auras), so the result never depends on hit order and a weak long brittle never extends a strong short one.
 - `knockback`: move back along path by `dist` (ships use `shipDist`, default 0).
 - `expose` / `strip`: removes Phantom (permanently for strip, timed for expose) so all towers can target it.
 
@@ -230,8 +233,10 @@ Common fields on every attack: `kind, cooldown, dtype, damage, pierce, range (op
 ```js
 import { Sim } from './src/sim/game.js';
 const sim = new Sim({ mapId: 'crater', difficulty: 'pilot', seed: 12345, heroId: null });
-Sim.fromSave(saveObject) -> Sim
+Sim.fromSave(saveObject) -> Sim        // throws Error('Invalid save: <reason>') for a bad save
+Sim.validateSave(saveObject) -> null | reason
 ```
+`validateSave` checks the save structurally before anything is built: `v === SAVE_VERSION`, a known map, difficulty and Commander, finite numbers for seed, tick, wave, cleared (<= wave), credits (>= 0), lives and max lives (> 0), a 4-number RNG state, finite stats, and a tower list whose entries have a known type, a unique id, a finite position, `paid` >= 0, three integer levels 0..5 that obey the crosspath rule (and are 0 on paths the tower lacks), and at most one Commander at a legal level. The client catches the throw, clears the save and tells the player.
 
 ### Commands (UI and bots). All return `{ ok: true, ... }` or `{ ok: false, reason }`.
 ```js
@@ -241,15 +246,16 @@ sim.upgrade(towerId, path)            // path 0..2
 sim.upgradeInfo(towerId, path)        // -> { tier, name, desc, cost, state, reason }
 sim.sell(towerId)                     // -> { ok, value }
 sim.sellValue(towerId)
+sim.sellParts(towerId)                // { undo, refund70, vault, total }: this build phase's spend at 100%, 70% of the rest, a Rig's vault; total === sellValue
 sim.setTargeting(towerId, mode)
 sim.setAim(towerId, x, y)
 sim.withdraw(towerId)                 // vault
 sim.startWave()                       // build phase, or early send when current wave has finished spawning
 sim.canStartWave()
-sim.setAutoStart(bool)
+sim.setAutoStart(bool)                // launches the next wave 1 s after a wave is cleared in this session (never wave 1 of a new run, never right after a restore)
 sim.useAbility(abilityId)
 sim.abilityBar()
-sim.towerInfo(towerId)                // UI summary: name, levels, pops, damage, cashEarned, sellValue, targeting, modes, range, detection
+sim.towerInfo(towerId)                // UI summary: name, levels, pops, damage, cashEarned, sellValue, sellParts, undoable (full refund), partialUndo (this build phase's upgrades refund in full), targeting, modes, range, detection
 sim.priceOf(type)                     // difficulty-adjusted base price (no discount)
 sim.priceAt(type, x, y)               // with Beacon discount at that spot
 sim.wavePreview(w)                    // [{ type, count, mods }]
@@ -275,6 +281,9 @@ sim.emit(event)
 
 ### Damage and popping rules
 - Immunity: `def.immune` includes dtype and dtype not in `src.bypass` -> no damage, emit `blocked`, the hit still consumes pierce.
+- A hit breaks a shell when it is within 1e-9 of the remaining HP, so fractional ticks (beams, burns, fields) never leave a live sliver.
+- Aegis shield: KINETIC damage counts 0.2x against the shield (1x with a `SHIELD` bypass). On-hit effects (stun, slow, burn, brittle, knockback, ...) land only when damage reaches the hull: a hit the shield absorbs in full applies none of them.
+- Nanite regrowth: after 3 s without damage a nanite shell regrows exactly one grade, into its direct parent in the family tree of its original type (`familyParent(origType, type)`: Rust to Cobalt ... Amber to Rose, Rose to its special parent (Magma when the family has both Magma and Comet), Magma or Comet to Geode, Geode to Aurora, Aurora to Obsidian), never above `origType`; an intact `origType` shell heals to full.
 - Frozen + KINETIC without `FROZEN` bypass -> blocked.
 - Damage applied: `(amount + bonus[type] + (ship ? shipDamage : 0) + brittle.add) x brittle.mult x (crit ? mult : 1)`.
 - When shell HP reaches 0: pay bounty `incomeFactor(enemy.wave)` unless the shell is unpaid (`owed === 0`: a nanite shell that regrew, or its children, beyond the shells the family had; a Maw volley past its paid count; docs/ECONOMY.md 1.1), `pops += 1`, spawn children at the same `d` (spread +-6 units), children inherit phantom, nanite, origType, wave, hullMult, speedMult and `immuneProj`; plated is not inherited; `def.childMods` are forced on. **Overflow** (damage beyond the shell's remaining HP) is applied to each child, except for ships (no overflow into ship children). Overflow recursion is capped at the family depth.
@@ -318,8 +327,9 @@ on waveCleared: storage.saveRun(sim.serialize()); records update
 Debug hooks: `window.__ss = { get sim(), game, debug: { quickStart(mapId, difficulty, heroId), giveCash(n), place(type, x, y), upgrade(id, path, times), startWave(), skipTo(w), step(n), stats() } }`. `?debug=1` shows an FPS / entity overlay.
 
 ## 10. Performance budget
-- 60 fps at 3x speed with 1,500 enemies, 800 projectiles, 60 towers on a mid laptop.
-- Spatial hash (cell 64) rebuilt once per tick for enemies. No per-tick allocations in hot loops where avoidable (reuse arrays, pool projectiles).
+- Target: 60 fps at 3x speed with 1,500 enemies, 800 projectiles, 60 towers on a mid laptop. **Measured, not met at that load.** `node tools/headless.mjs --perf --enemies 1500 --towers 60 --projectiles 800` (the enemy count is topped up every tick, about 25,000 pops per second, 450 to 500 events per tick) runs at 3.8 to 6.4 ms per tick on a desktop Ryzen 9 5900X (2026-09, other processes sharing the CPU; worst single tick 12 to 30 ms). At 3x the client runs 3 ticks per 60 Hz frame, so that is 11 to 19 ms of simulation per frame before rendering: the full budget, or more. With 60 ships and a Titan on the field (`--ships 60 --titan`) it is 5.4 to 7.4 ms per tick (8.1 to 10.7 ms before big bodies left the grid, below). Real late waves are much lighter per tick: a solid bot with unlimited Integrity averages 1.0 to 2.7 ms per tick over waves 101 to 170 (worst wave about 5 ms, two-lane Ember; QA longrun, before this pass). So 3x holds 60 fps through real play on a desktop, while the synthetic budget load needs about 30 fps or 2x.
+- Profile at the budget load (`node --cpu-prof`): spatial queries dominate (projectile sweeps, targeting, fields, about 30% together), then the enemy update, enemy creation and popping (per-shell objects and `pop` events). Changes from this pass: ships and Titans (radius > `BIG_RADIUS` = 24) live in a short separate list that every query scans, so a Titan no longer widens every grid query by 80 units. Not done, and the next candidates: aggregating `pop` events per tick (needs the renderer and audio to accept a count) and pooling enemy objects.
+- Spatial hash (cell 64) rebuilt once per tick for enemies; enemies spawned or teleported mid-tick are filed into a per-cell overflow list (`SpatialHash.insert`) so the same tick's area queries see them. No per-tick allocations in hot loops where avoidable (reuse arrays, pool projectiles).
 - Enemy position: `Path` precomputes samples every 2 units (x, y, angle) so `pointAt(d)` is O(1).
 - Renderer pre-renders static layers; sprites are drawn with `drawImage` from pre-scaled offscreen canvases (cache per sprite key per zoom bucket).
 
@@ -349,7 +359,8 @@ Additions and deviations the modules settled on while being built. They extend t
 ### Engine additions in the content phase
 - Storm Titans resist slows: a slow (or a freeze turned into a ship slow) is half as strong on a Titan (`TITAN_SLOW_RESIST = 0.5` in `src/sim/enemies.js`; a 0.4 slow becomes 0.7), matching stuns, which already last half as long. An effect can give Titans an exact value with `slow.titanMult` / `freeze.titanMult` (Absolute Zero and Gravity Hauler do).
 - Balance pass: `mods.scout` on a ship group spawns it with `SCOUT_HULL` (0.2) of its hull and an empty hold (`familyMass(type, H, plated, scout)`, `e.scout`, no children, leak = remaining hull); the wave 50 Specter debut uses it. A penetrating `line` hitscan stops at the first ship it damages. Two-lane maps may set `map.pace = { mult, until, fade }`; `Sim.paceAt(w)` stretches that wave's spawn times (never its content).
-- CRYO-immune meteors (Comet, Geode) are never slowed or frozen by CRYO effects, including on-hit effects passed down from a parent (`applyEffects` guard).
+- CRYO-immune meteors (Comet, Geode) are never slowed or frozen by CRYO effects, including on-hit effects passed down from a parent (`applyEffects` guard) and a slow inherited when the parent pops (`e.slowDtype`).
+- QA pass (2026-09): the spatial hash stays exact mid-tick (children spawned by a hit are visible to that hit's own splash, chain jumps and targeting in the same tick; knockback, Rift blinks and built-in field pulls re-file the enemy; smaller same-tick moves are covered by `MOVE_SLACK` = 8 units). The Rift's blink never moves it backward (it stops 90 units short of the Core). The Maw's spit grade is indexed by its appearance, not its tier (`mawSpitType`). `canPlace` refuses any Commander in a match whose `heroId` is null. `hash()` hashes drones in (tower, attack, slot) order, so a restored save hashes like the run that saved it. Placing or upgrading a tower in the build phase re-snaps drones, and `snapDrones` applies a tower attack's `look` / `droneColor` (the Drone Bay's companion `bay` attack), so restored drones look and sit exactly as live ones.
 - `findTarget(..., exclude)` accepts an array of ids or a number stamp (skip enemies whose `e._xs` equals it). Chain attacks stamp every enemy they hit, so exclusion is O(1) per check for long chains.
 - `sim.spawnProjectile(p)` sets the normalized attack's `key` from `p.attackKey` (or `p.key`), so custom projectiles report their `attackKey`.
 - Beacon and Commander `shipDamageAdd` buffs also raise `splash.shipDamage`.

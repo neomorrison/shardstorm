@@ -83,8 +83,13 @@ function buffAttack(a, b) {
     if (a.cooldown) a.cooldown /= b.rateMult;
     if (a.dps) a.dps *= b.rateMult;
   }
+  // Pierce buffs: projectiles, hitscan and pulses hit more targets; a mortar shell's blast hits
+  // more meteors (splash pierce). Beams, chains, fields and drones have no pierce of their own
+  // (a drone's weapon is buffed through `a.weapon` below), so the buff does not change them.
   if (b.pierceAdd && (a.kind === undefined || a.kind === 'projectile' || a.kind === 'hitscan' || a.kind === 'pulse')) {
     a.pierce = (a.pierce ?? (a.kind === 'pulse' ? 40 : 1)) + b.pierceAdd;
+  } else if (b.pierceAdd && a.kind === 'mortar' && a.splash) {
+    a.splash.pierce = (a.splash.pierce ?? 20) + b.pierceAdd;
   }
   if (b.damageAdd) {
     if ((a.damage ?? 1) > 0) a.damage = (a.damage ?? 1) + b.damageAdd;

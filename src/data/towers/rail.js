@@ -55,12 +55,13 @@ export default {
             const a = main(s);
             a.damage += 16; a.shipDamage = (a.shipDamage || 0) + 84; a.pierce = Math.max(a.pierce, 5);
           } },
-        { name: 'Planet Cracker', cost: 32000, desc: 'Slugs deal 150 damage (1300 to ships), punch through 10 meteors (a ship stops the slug), hit every meteor type including Specters, and crack the ground in a 60 unit shockwave.',
+        { name: 'Planet Cracker', cost: 32000, desc: 'Slugs deal 150 damage (1,300 to ships), punch through 10 meteors (a ship stops the slug), hit every meteor type including Specters, and crack the ground in a 60 unit shockwave that deals 12 damage (72 to ships) to up to 30 enemies.',
           apply(s) {
             const a = main(s);
             a.damage += 114; a.shipDamage = (a.shipDamage || 0) + 1036; a.pierce = Math.max(a.pierce, 10);
             addBypass(a, 'KINETIC', 'FROZEN');
-            a.splash = { radius: 60, damage: 12, pierce: 30, dtype: 'KINETIC', shipDamage: 60, visual: 'cracker', color: '#ffe08a' };
+            // the shockwave carries its own copy of the bypass so an aura's bypass buff adds to it
+            a.splash = { radius: 60, damage: 12, pierce: 30, dtype: 'KINETIC', shipDamage: 60, bypass: a.bypass.slice(), visual: 'cracker', color: '#ffe08a' };
             a.visual = 'railslug'; a.color = '#fff3b0';
           } },
       ],
@@ -92,7 +93,7 @@ export default {
             a.shrapnel.damage += 3;
             a.shrapnel.onHit = { ...(a.shrapnel.onHit || {}), brittle: { add: 3, mult: 1, t: 3 } };
           } },
-        { name: 'Warden', cost: 16000, desc: 'Fires 60% faster with 20 more damage, 12 shrapnel shards deal 11 damage and pierce 4, every slug and shard stuns (meteors 1.2 s, ships 0.4 s), and brittle targets take 50% more damage plus 3.',
+        { name: 'Warden', cost: 16000, desc: 'Fires 60% faster with 20 more damage, 12 shrapnel shards deal 11 damage and pierce 4, every slug and shard stuns (meteors 1.2 s, ships 0.4 s), and brittle targets take 3 extra damage per hit and then 50% more.',
           apply(s) {
             const a = main(s);
             a.cooldown /= 1.6; a.damage += 20;
@@ -120,7 +121,7 @@ export default {
             a.cooldown /= 1.4; a.damage += 16;
             s.income = { perWave: 0, vault: null, refinery: null, supply: { drops: 2, value: 100 } };
           } },
-        { name: 'Quartermaster', cost: 18000, desc: 'Fires twice as fast with 50 more damage, drops 5 crates of 150 credits after each wave, and every other Rail Sniper within 400 units fires 15% faster.',
+        { name: 'Quartermaster', cost: 18000, desc: 'Fires twice as fast with 50 more damage, drops 5 crates of 150 credits after each wave, and every other Rail Sniper within 400 units fires 15% faster (this does not stack with a Beacon speed buff; the higher one applies).',
           apply(s) {
             const a = main(s);
             a.cooldown *= 0.5; a.damage += 50; a.color = '#ffe08a';

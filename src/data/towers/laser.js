@@ -6,7 +6,8 @@
 // THERMAL hits Iron, Magma, Comets, Geodes and frozen meteors; Prism meteors are immune.
 // Answers: Focus (path B) adds detection at T2; Plasma (path C) switches to VOID at T3, which
 // hits every meteor type, and its lance (T4+) burns Phantom meteors caught on the line.
-// Beam shipDamage is added on every 0.1 s tick, so +1 shipDamage = +10 damage per second.
+// Beam shipDamage is added on every damage tick (tickRate: 0.1 s, 0.05 s from Prism Fork, 1/30 s
+// at Rainbow Lattice), so on the Focus path +1 shipDamage = +10 damage per second.
 
 const main = (s) => s.attacks.main;
 
@@ -125,7 +126,7 @@ export default {
           apply(s) { main(s).beams += 1; } },
         { name: 'Tri-Beam', cost: 900, desc: 'Fires 3 beams. Range +15.',
           apply(s) { main(s).beams += 1; s.range += 15; } },
-        { name: 'Prism Fork', cost: 3600, desc: 'Fires 5 rainbow beams that deal 2.5 times the damage and retarget twice as fast.',
+        { name: 'Prism Fork', cost: 3600, desc: 'Fires 5 rainbow beams that deal 2.5 times the damage and land twice as many hits per second.',
           apply(s) {
             const a = main(s);
             a.beams += 2; a.dps *= 2.5; a.width = 5; a.tickRate = 0.05;
@@ -133,7 +134,7 @@ export default {
           } },
         { name: 'Spectrum Array', cost: 9500, desc: 'Fires 6 beams that deal 3.5 times the damage and ramp up 50% faster.',
           apply(s) { const a = main(s); a.beams += 1; a.dps *= 3.5; a.ramp *= 1.5; } },
-        { name: 'Rainbow Lattice', cost: 48000, desc: 'Fires 8 beams that deal 7 times the damage, retarget faster and ramp up to 4x. Range +45.',
+        { name: 'Rainbow Lattice', cost: 48000, desc: 'Fires 8 beams that deal 7 times the damage, land 50% more hits per second and ramp up to 4x. Range +45.',
           apply(s) { const a = main(s); a.beams += 2; a.dps *= 7; a.rampMax += 1.5; a.width = 4; a.tickRate = 1 / 30; s.range += 45; } },
       ],
     },
@@ -156,7 +157,7 @@ export default {
             a.dps *= 2; a.ramp *= 1.5; a.rampMax += 3; a.shipDamage = (a.shipDamage || 0) + 15;
             a.width = 11; a.color = '#ffd76a';
           } },
-        { name: 'Sunspear', cost: 75000, desc: 'Deals triple damage, ramps twice as fast up to 14x and deals 1500 extra damage per second to ships.',
+        { name: 'Sunspear', cost: 75000, desc: 'Deals triple damage, ramps twice as fast up to 14x and deals 1,500 extra damage per second to ships.',
           apply(s) {
             const a = main(s);
             a.dps *= 3; a.ramp *= 2; a.rampMax += 6; a.shipDamage = (a.shipDamage || 0) + 132;
@@ -182,7 +183,7 @@ export default {
             a.dps *= 2.8; a.width = 9; a.rampWidth = true; a.color = '#c77dff'; a.visual = 'lance';
             s.attacks.lance = { kind: 'custom', dtype: 'VOID', needsTarget: false, damage: 0, pierce: 15, lineLength: s.range + 50, hitWidth: 10, update: lanceUpdate };
           } },
-        { name: 'Singularity Lance', cost: 48000, desc: 'A 1100-unit lance that deals 4 times the damage, ramps twice as fast up to 5x and burns up to 50 enemies along it.',
+        { name: 'Singularity Lance', cost: 48000, desc: 'A 1,100-unit lance that deals 4 times the damage, ramps twice as fast up to 5x and burns up to 50 enemies along it.',
           apply(s) {
             const a = main(s), l = s.attacks.lance;
             a.dps *= 4; a.rampMax = Math.max(5, a.rampMax + 1.5); a.ramp *= 2; a.width = 16;

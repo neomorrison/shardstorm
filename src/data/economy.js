@@ -27,13 +27,13 @@ export function waveBonus(w) {
 // Threat budget B(w) (mass per wave)
 export const B_A = 19, B_P = 0.81, B_G = 1.0514;
 // The surge makes log B(w) grow quadratically from SURGE_START (the storm always wins). After
-// SURGE_CAP more waves it continues along its tangent (constant growth) only so that every number
-// stays finite far past any run: budget(1000) is about 3e271 instead of Infinity.
+// SURGE_CAP more waves it continues along its tangent (constant growth), which keeps budget(w)
+// finite far past any real run: budget(1000) is about 3e271. From about wave 1190 budget(w) and
+// surge(w) overflow to Infinity; wavegen caps the wave budget at MAX_BUDGET and titanHp works in
+// log space, so every value a wave spec carries stays finite.
 export const K_SURGE = 0.0032, SURGE_START = 65, SURGE_CAP = 100;
 export function surge(w) {
-  const x = Math.max(0, w - SURGE_START);
-  const e = x <= SURGE_CAP ? K_SURGE * x * x : K_SURGE * SURGE_CAP * (2 * x - SURGE_CAP);
-  return Math.exp(e);
+  return Math.exp(surgeExponent(w));
 }
 export function budget(w) {
   return B_A * Math.pow(w, B_P) * Math.pow(B_G, w) * surge(w);
@@ -62,11 +62,23 @@ export const TITAN_EVERY = 20;
 // The hull multiplier H only exists inside budget(w), so it is not applied again.
 export const TITAN_K = 0.7;
 export const TITAN_SURGE_EXP = 0.5;
+// Past about wave 1190 budget(w) and surge(w) overflow to Infinity (their ratio would be NaN),
+// so there the hull is computed in log space; it is capped at TITAN_MAX_HP and finite at any tier.
+export const TITAN_MAX_HP = 1e300;
+export function surgeExponent(w) {
+  const x = Math.max(0, w - SURGE_START);
+  return x <= SURGE_CAP ? K_SURGE * x * x : K_SURGE * SURGE_CAP * (2 * x - SURGE_CAP);
+}
 export function titanHp(tier) {
   const t = Math.max(1, tier);
   const w = TITAN_EVERY * t;
-  const hp = TITAN_K * Math.sqrt(t) * budget(w) / Math.pow(surge(w), 1 - TITAN_SURGE_EXP);
-  return Math.max(100, Math.round(hp / 10) * 10);
+  let hp = TITAN_K * Math.sqrt(t) * budget(w) / Math.pow(surge(w), 1 - TITAN_SURGE_EXP);
+  if (!Number.isFinite(hp)) {
+    const logHp = Math.log(TITAN_K) + 0.5 * Math.log(t) + Math.log(B_A) + B_P * Math.log(w)
+      + w * Math.log(B_G) + TITAN_SURGE_EXP * surgeExponent(w);
+    hp = Math.min(TITAN_MAX_HP, Math.exp(logHp));
+  }
+  return Math.max(100, Math.min(TITAN_MAX_HP, Math.round(hp / 10) * 10));
 }
 
 // Commander XP

@@ -66,8 +66,7 @@ export default {
       ],
     },
     {
-      
-name: 'Cyclone',
+      name: 'Cyclone',
       upgrades: [
         { name: 'Quick Cycle', cost: 100, desc: 'Fires 20% faster.',
           apply(s) { main(s).cooldown /= 1.2; } },

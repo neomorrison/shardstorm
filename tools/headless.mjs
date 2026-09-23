@@ -2,7 +2,7 @@
 //
 // Usage:
 //   node tools/headless.mjs --map crater --difficulty pilot --bot solid --waves 80 --seed 1 [--quiet] [--hash] [--hero vega]
-//   node tools/headless.mjs --perf [--enemies 1500 --towers 40 --ticks 600 --projectiles 800]
+//   node tools/headless.mjs --perf [--enemies 1500 --towers 40 --ticks 600 --projectiles 800 --ships 60 --titan]
 //   Test-only overrides: --god (practically infinite Core Integrity), --cash N (starting credits).
 //   --verbose prints the final tower list; --abilities off stops the bots from firing abilities.
 //
@@ -1021,7 +1021,9 @@ export function runGame({ map = 'crater', difficulty = 'pilot', bot = 'solid', w
 }
 
 // ------------------------------------------------------------------ perf benchmark
-export function runPerf({ enemies = 1500, towers = 40, ticks = 600, seed = 3, projectiles = 0, log = console.log } = {}) {
+// ships: keep this many Haulers alive among the enemies, titan: keep one Storm Titan on the field
+// (late waves always have ships, and every 20th wave a Titan; both are big bodies for the grid).
+export function runPerf({ enemies = 1500, towers = 40, ticks = 600, seed = 3, projectiles = 0, ships = 0, titan = false, log = console.log } = {}) {
   const sim = new Sim({ mapId: 'crater', difficulty: 'pilot', seed });
   sim.state.cash = 1e9;
   const types = TOWER_LIST.filter((t) => t !== 'rig' && t !== 'beacon');
@@ -1055,6 +1057,18 @@ export function runPerf({ enemies = 1500, towers = 40, ticks = 600, seed = 3, pr
       }
     }
     let live = sim._liveEnemies;
+    if (titan && !sim._titans.some((e) => !e.dead)) {
+      sim.spawnEnemy('titan', { d: L * 0.3, titan: { kind: 'aegis', tier: 5, hp: 1e12 } });
+      live++;
+    }
+    if (ships > 0) {
+      let n = 0;
+      for (const e of sim.state.enemies) if (!e.dead && e.ship && e.titan === null) n++;
+      while (n < ships) {
+        sim.spawnEnemy('hauler', { d: rng.next() * L * 0.9, wave: 30, hullMult: 50 });
+        n++; live++;
+      }
+    }
     while (live < enemies) {
       const type = rng.next() < 0.1 ? 'obsidian' : rng.next() < 0.5 ? 'rose' : 'geode';
       sim.spawnEnemy(type, { d: rng.next() * L * 0.9, wave: 30, off: (rng.next() - 0.5) * 18, nanite: rng.next() < 0.2 });
@@ -1075,7 +1089,7 @@ export function runPerf({ enemies = 1500, towers = 40, ticks = 600, seed = 3, pr
     for (const ev of sim.drainEvents()) if (ev.t === 'shot') shots++;
   }
   const tps = ticks / (tSim / 1000);
-  log(`perf: ${placed} towers, avg ${Math.round(eSum / ticks)} enemies, avg ${Math.round(pSum / ticks)} projectiles, ${Math.round(shots / (ticks / 60))} shots/s, ${Math.round((sim.state.stats.pops - pops0) / (ticks / 60))} pops/s, ${ticks} ticks in ${tSim.toFixed(0)} ms = ${Math.round(tps)} ticks/s (${(tSim / ticks).toFixed(3)} ms/tick, worst ${worst.toFixed(2)} ms; 3x speed needs 180 ticks/s)`);
+  log(`perf: ${placed} towers${ships ? ', ' + ships + ' ships' : ''}${titan ? ', a Titan' : ''}, avg ${Math.round(eSum / ticks)} enemies, avg ${Math.round(pSum / ticks)} projectiles, ${Math.round(shots / (ticks / 60))} shots/s, ${Math.round((sim.state.stats.pops - pops0) / (ticks / 60))} pops/s, ${ticks} ticks in ${tSim.toFixed(0)} ms = ${Math.round(tps)} ticks/s (${(tSim / ticks).toFixed(3)} ms/tick, worst ${worst.toFixed(2)} ms; 3x speed needs 180 ticks/s)`);
   return tps;
 }
 
@@ -1097,12 +1111,12 @@ if (isMain) {
   --god           practically infinite Core Integrity (engine stress tests)
   --cash N        starting credits override
   --quiet         no per-wave lines;  --hash  print the final state hash;  --verbose  list towers
-  --perf [--enemies N --towers N --ticks N --projectiles N]   engine performance benchmark`);
+  --perf [--enemies N --towers N --ticks N --projectiles N --ships N --titan]   engine performance benchmark`);
     process.exit(0);
   }
   try {
     if (has('perf')) {
-      runPerf({ enemies: Number(flag('enemies', 1500)), towers: Number(flag('towers', 40)), ticks: Number(flag('ticks', 600)), projectiles: Number(flag('projectiles', 0)) });
+      runPerf({ enemies: Number(flag('enemies', 1500)), towers: Number(flag('towers', 40)), ticks: Number(flag('ticks', 600)), projectiles: Number(flag('projectiles', 0)), ships: Number(flag('ships', 0)), titan: has('titan') });
     } else {
       const { summary } = runGame({
         map: flag('map', 'crater'), difficulty: flag('difficulty', 'pilot'), bot: flag('bot', 'solid'),

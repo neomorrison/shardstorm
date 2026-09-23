@@ -1,6 +1,6 @@
 // Attack kind implementations (docs/ARCHITECTURE.md 5.3): projectile, hitscan, chain, beam,
 // pulse, field, mortar, drone, custom. Pure.
-import { damageEnemy, applyEffects, canDamage, placeOnPath } from './enemies.js';
+import { damageEnemy, applyEffects, canDamage, placeOnPath, refile } from './enemies.js';
 import { findTarget } from './towers.js';
 import { launchProjectile, allocProjectile, explode, leadPoint } from './projectiles.js';
 
@@ -312,7 +312,7 @@ export function updateField(sim, t, a, dt) {
     if (a.onTick) a.onTick(sim, t, e, a, dt);
     if (pull > 0 && e.titan === null) {
       const pv = e.ship ? shipPull : pull;
-      if (pv > 0 && e.d > 0) { e.d -= pv * dt; if (e.d < 0) e.d = 0; placeOnPath(sim, e); }
+      if (pv > 0 && e.d > 0) { e.d -= pv * dt; if (e.d < 0) e.d = 0; placeOnPath(sim, e); refile(sim, e); }
     }
     if (dmgNow && !e.dead) damageEnemy(sim, e, a.dps * a.tickRate, a.dtype, a._src, -1, a.onHit || null);
   }
@@ -335,7 +335,7 @@ function droneList(sim, t, a) {
   while (dl.length < count) {
     const idx = dl.length;
     orbitPoint(sim, t, a, idx, count, orb);
-    const d = { id: sim._nextDroneId++, towerId: t.id, x: orb.x, y: orb.y, angle: 0, targetId: -1, cd: 0, visual: a.visual || 'drone', kind: a.droneKind || a.key, idx, key: a.key, color: a.color || null };
+    const d = { id: sim._nextDroneId++, towerId: t.id, x: orb.x, y: orb.y, angle: 0, targetId: -1, cd: 0, visual: a.visual || 'drone', kind: a.droneKind || a.key, idx, key: a.key, color: a.color || null, towing: false };
     dl.push(d);
     sim.state.drones.push(d);
   }
@@ -396,16 +396,24 @@ export function updateDrones(sim, t, a, dt) {
 }
 
 // Put every drone exactly on its idle orbit point (used when entering the build phase and
-// after loading a save so both runs stay bit-identical).
+// after loading a save so both runs stay bit-identical). A tower attack with a `look` (and
+// optional `droneColor`), such as the Drone Bay's companion `bay` attack, restyles the drones
+// here too, so a restored save shows the same drones as the run that saved it.
 export function snapDrones(sim) {
   for (const t of sim.state.towers) {
+    let look = null;
+    for (const a of t.stats._attackList) if (typeof a.look === 'string') { look = a; break; }
     for (const a of t.stats._attackList) {
       if (a.kind !== 'drone') continue;
       const dl = droneList(sim, t, a);
       for (let i = 0; i < dl.length; i++) {
         orbitPoint(sim, t, a, i, dl.length, orb);
         const d = dl[i];
-        d.x = orb.x; d.y = orb.y; d.targetId = -1; d.cd = 0; d.angle = 0;
+        d.x = orb.x; d.y = orb.y; d.targetId = -1; d.cd = 0; d.angle = 0; d.towing = false;
+        if (look) {
+          d.kind = look.look; d.visual = look.look;
+          if (look.droneColor !== undefined) d.color = look.droneColor;
+        }
       }
     }
   }
